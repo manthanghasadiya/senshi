@@ -36,6 +36,10 @@ Traditional scanners fire generic payloads and drown you in false positives. Sen
 | **7 DAST Scanners** | XSS, SSRF, IDOR, SQLi/CMDi/SSTI, Auth bypass, Deserialization, AI Product |
 | **5 SAST Scanners** | Injection, Auth, Crypto, Config, AI pattern detection |
 | **Auto-Recon** | Endpoint discovery, JS analysis, tech fingerprinting |
+| **Browser Recon** | Headless Chromium captures XHR/fetch for hidden API endpoints |
+| **Smart Routing** | Scanners only run on relevant endpoints (~2x speedup) |
+| **Batch Analysis** | 1 LLM call per endpoint per scanner (~6x fewer API calls) |
+| **Progressive Save** | Results saved to disk as found — Ctrl+C preserves findings |
 | **4 Output Formats** | JSON, Markdown, SARIF (CI/CD), Bounty Report |
 | **Burp Integration** | Route traffic through your proxy |
 
@@ -84,11 +88,16 @@ senshi sast https://github.com/user/repo.git
 # Recon only
 senshi recon https://target.com --depth 3
 
+# Browser-based recon (captures XHR/fetch traffic)
+senshi recon https://target.com --browser --output endpoints.json
+
+# DAST with pre-discovered endpoints
+senshi dast https://target.com --endpoints endpoints.json
+
 # Generate payloads
 senshi payloads --vuln xss --target "POST /api/chat" --param message
 
 # Generate bounty report from findings
-senshi dast https://target.com --output findings.json
 senshi report findings.json --platform hackerone --output report.md
 ```
 
@@ -147,10 +156,10 @@ senshi report findings.json --platform hackerone --output report.md
 ```
 senshi/
 ├── ai/                     # AI Core
-│   ├── brain.py            # Universal LLM interface (no SDK dependencies)
+│   ├── brain.py            # Universal LLM interface (robust JSON extraction)
 │   ├── prompts/            # Security-focused system prompts
 │   ├── payload_gen.py      # Context-aware payload generator
-│   ├── response_analyzer.py
+│   ├── response_analyzer.py # Batch response analysis (v0.2.0)
 │   ├── code_analyzer.py
 │   ├── false_positive_filter.py
 │   ├── chain_builder.py
@@ -158,12 +167,13 @@ senshi/
 ├── core/
 │   ├── config.py           # Auto-detect providers from env vars
 │   ├── session.py          # HTTP session (auth, proxy, rate limiting)
-│   └── engine.py           # Main scan orchestrator
+│   └── engine.py           # Main scan orchestrator (smart routing, progressive save)
 ├── dast/
 │   ├── crawler.py          # Endpoint discovery + LLM JS analysis
+│   ├── browser_recon.py    # Playwright headless browser recon (v0.2.0)
 │   ├── tech_detector.py    # Tech stack fingerprinting
 │   ├── param_discovery.py  # Hidden parameter fuzzing
-│   ├── scanners/           # 7 DAST scanner modules
+│   ├── scanners/           # 7 DAST scanner modules (smart routing)
 │   └── validators/         # Exploitability validation
 ├── sast/
 │   ├── repo_loader.py      # Load from dir, git, zip
@@ -172,7 +182,7 @@ senshi/
 │   ├── context_builder.py
 │   └── scanners/           # 5 SAST scanner modules
 ├── reporters/
-│   ├── models.py           # Finding + ScanResult (Pydantic)
+│   ├── models.py           # Finding + ScanResult + ScanState (Pydantic)
 │   ├── json_report.py
 │   ├── markdown_report.py
 │   ├── sarif_report.py
@@ -187,6 +197,11 @@ senshi/
 git clone https://github.com/manthanghasadiya/senshi.git
 cd senshi
 pip install -e ".[dev]"
+
+# For browser recon support
+pip install -e ".[browser]"
+playwright install chromium
+
 pytest tests/ -v
 ```
 

@@ -55,10 +55,11 @@ def dast(
     proxy: str = typer.Option("", help="Proxy URL (e.g., http://127.0.0.1:8080)"),
     modules: str = typer.Option("", help="Comma-separated scanner modules"),
     rate_limit: float = typer.Option(1.0, help="Min seconds between requests"),
-    output: str = typer.Option("", help="Output file path (.json, .md, .sarif)"),
+    output: str = typer.Option("", help="Output file path (.json)"),
     verbose: bool = typer.Option(False, "--verbose", help="Show detailed output"),
     max_payloads: int = typer.Option(15, help="Max payloads per scanner"),
     timeout: float = typer.Option(10.0, help="HTTP request timeout in seconds"),
+    endpoints: str = typer.Option("", help="Path to endpoints file (from 'senshi recon')"),
 ) -> None:
     """Run a DAST scan against a live target."""
     from senshi.core.config import SenshiConfig
@@ -97,10 +98,12 @@ def dast(
 
     try:
         engine = ScanEngine(config)
-        result = engine.run_dast(url, modules=module_list, max_payloads=max_payloads)
-
-        # Output
-        _write_output(result, output)
+        result = engine.run_dast(
+            url,
+            modules=module_list,
+            max_payloads=max_payloads,
+            output=output or None,
+        )
 
     except Exception as e:
         print_error(f"Scan failed: {e}")
@@ -164,6 +167,7 @@ def recon(
     depth: int = typer.Option(3, help="Crawl depth"),
     output: str = typer.Option("", help="Save endpoints to JSON"),
     verbose: bool = typer.Option(False, "--verbose"),
+    browser: bool = typer.Option(False, "--browser", help="Use headless browser for recon"),
 ) -> None:
     """Discover endpoints (recon only, no scanning)."""
     import json
@@ -192,7 +196,25 @@ def recon(
     tech_info = tech.detect()
     print_success(f"Tech stack: {tech.get_summary(tech_info)}")
 
-    # Crawl
+    endpoints = []
+
+    # Browser-based recon
+    if browser:
+        try:
+            from senshi.dast.browser_recon import BrowserRecon
+            console.print("[bold cyan]Browser recon:[/bold cyan] Launching headless browser...")
+            browser_recon = BrowserRecon(timeout=30)
+            browser_endpoints = browser_recon.discover(url, auth=auth)
+            endpoints.extend(browser_endpoints)
+            print_success(f"Browser discovered {len(browser_endpoints)} endpoints")
+        except ImportError:
+            print_error(
+                "Playwright not installed. Run: pip install 'senshi[browser]' && playwright install chromium"
+            )
+        except Exception as e:
+            print_error(f"Browser recon failed: {e}")
+
+    # Standard crawl
     brain = None
     try:
         brain = Brain(config=config)
@@ -200,7 +222,14 @@ def recon(
         console.print("[dim]No LLM configured, using basic crawl[/dim]")
 
     crawler = Crawler(session, brain=brain, max_depth=depth)
-    endpoints = crawler.crawl()
+    crawl_endpoints = crawler.crawl()
+
+    # Merge endpoints (deduplicate)
+    seen = {(ep.url, ep.method) for ep in endpoints}
+    for ep in crawl_endpoints:
+        if (ep.url, ep.method) not in seen:
+            endpoints.append(ep)
+            seen.add((ep.url, ep.method))
 
     # Display
     table = Table(title="Discovered Endpoints")

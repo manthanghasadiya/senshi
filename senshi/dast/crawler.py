@@ -28,12 +28,14 @@ class DiscoveredEndpoint:
         params: list[str] | None = None,
         source: str = "crawl",
         risk_level: str = "medium",
+        content_type: str = "",
     ) -> None:
         self.url = url
         self.method = method
         self.params = params or []
         self.source = source  # crawl, js, api, robots
         self.risk_level = risk_level
+        self.content_type = content_type
         self.priority_tests: list[str] = []
 
     def to_dict(self) -> dict[str, Any]:
@@ -43,6 +45,7 @@ class DiscoveredEndpoint:
             "params": self.params,
             "source": self.source,
             "risk_level": self.risk_level,
+            "content_type": self.content_type,
             "priority_tests": self.priority_tests,
         }
 

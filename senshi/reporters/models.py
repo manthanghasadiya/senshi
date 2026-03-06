@@ -103,6 +103,63 @@ class Finding(BaseModel):
         return f"[{self.severity.value.upper()}] {self.title} — {location}"
 
 
+class ScanState:
+    """Persistent scan state that survives interrupts.
+
+    Writes findings to disk as they're discovered so nothing is lost
+    on Ctrl+C or crash.
+    """
+
+    def __init__(self, output_path: str) -> None:
+        import json as _json  # noqa: avoid circular
+        from pathlib import Path as _Path
+
+        self._json = _json
+        self._Path = _Path
+        self.output_path = output_path
+        self.findings: list[Finding] = []
+        self.scanned_endpoints: list[str] = []
+        self.start_time = datetime.now().isoformat()
+        self.status = "running"
+        self.llm_calls = 0
+
+    def add_finding(self, finding: Finding) -> None:
+        """Add finding and immediately save to disk."""
+        self.findings.append(finding)
+        self._save()
+
+    def add_findings(self, findings: list[Finding]) -> None:
+        """Add multiple findings and save."""
+        self.findings.extend(findings)
+        self._save()
+
+    def mark_endpoint_done(self, endpoint: str) -> None:
+        self.scanned_endpoints.append(endpoint)
+        self._save()
+
+    def _save(self) -> None:
+        """Write current state to JSON file."""
+        data = {
+            "status": self.status,
+            "start_time": self.start_time,
+            "findings_count": len(self.findings),
+            "scanned_endpoints": self.scanned_endpoints,
+            "llm_calls": self.llm_calls,
+            "findings": [f.to_dict() for f in self.findings],
+        }
+        self._Path(self.output_path).write_text(
+            self._json.dumps(data, indent=2, default=str)
+        )
+
+    def complete(self) -> None:
+        self.status = "complete"
+        self._save()
+
+    def interrupt(self) -> None:
+        self.status = "interrupted"
+        self._save()
+
+
 class ScanResult(BaseModel):
     """Container for a complete scan's results."""
 

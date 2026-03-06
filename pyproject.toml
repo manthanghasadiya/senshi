@@ -1,6 +1,6 @@
 [project]
 name = "senshi"
-version = "0.1.0"
+version = "0.2.0"
 description = "AI-powered SAST + DAST security scanner for bug bounty hunters"
 authors = [{ name = "Manthan Ghasadiya" }]
 license = { text = "MIT" }
@@ -38,6 +38,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio", "ruff", "mypy", "flask"]
+browser = ["playwright>=1.40.0"]
 
 [project.scripts]
 senshi = "senshi.cli:app"

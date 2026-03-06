@@ -1,27 +1,53 @@
 # Changelog
 
-All notable changes to Senshi will be documented in this file.
+All notable changes to Senshi are documented here.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.2.0] — 2026-03-06
 
-## [0.1.0] - 2026-03-06
+### ⚡ Performance Overhaul
+- **Batch response analysis** — 1 LLM call per endpoint per scanner instead of 1 per payload (~6x fewer LLM calls)
+- **Smart endpoint-to-scanner routing** — XSS only scans HTML endpoints, SSRF only URL params, IDOR only numeric IDs, etc.
+- **Scan time reduction** — target 5-10 min vs 60+ min for a 7-endpoint app
+
+### 🛡 Reliability
+- **Progressive saving** — findings saved to disk as discovered via `ScanState`
+- **Ctrl+C handler** — partial results preserved on interrupt
+- **Robust JSON extraction** — handles markdown code blocks, trailing commas, comments, embedded JSON
+- **Auto-output** — results always saved to timestamped JSON file
+- **Finding deduplication** — same vuln at same endpoint = 1 finding
+
+### 🆕 New Features
+- **Browser-based recon** (`senshi recon --browser`) — Playwright headless browser captures XHR/fetch traffic
+- **Scan summary dashboard** — Rich table with severity, confidence, duration, LLM call count
+- **`--endpoints` flag** — use pre-discovered endpoints from `senshi recon`
+- **`--browser` flag** — enable headless browser recon
+- **`content_type` on endpoints** — enables smarter scanner routing
+
+### 🏗 Architecture Changes
+- Rewritten `BaseDastScanner` — new batch pipeline: generate → send all → analyze all → validate
+- Scanners receive full endpoint list, filter internally via `filter_relevant_endpoints()`
+- Engine instantiates scanners once with all endpoints (was once per endpoint)
+- `ResponseAnalyzer.analyze_batch()` replaces per-payload `analyze()`
+- `ScanState` in `reporters/models.py` for progressive save
+- `BrowserRecon` in `dast/browser_recon.py` for headless browser recon
+
+### 📦 Dependencies
+- `playwright` added as optional dependency (`pip install senshi[browser]`)
+
+---
+
+## [0.1.0] — 2026-03-06
 
 ### Added
-
-- **AI Core** — Universal LLM interface (`Brain`) supporting DeepSeek, OpenAI, Groq, Ollama, and Anthropic via raw `httpx` calls. No SDK dependencies.
-- **DAST Scanning** — 7 scanner modules: XSS, SSRF, IDOR, Injection (SQLi/command/SSTI), Auth bypass, Deserialization, and AI Product (prompt injection/data leakage).
-- **SAST Scanning** — 5 pattern scanners: Injection, Auth, Crypto, Config, and AI patterns. Multi-language parser for Python, JavaScript, TypeScript, Java, and Go.
-- **Endpoint Discovery** — Crawler with HTML crawling, JavaScript analysis (LLM-powered), form extraction, API pattern detection, and `robots.txt` parsing.
-- **Technology Detection** — Fingerprinting via header signatures, body patterns, cookie analysis, and path probing.
-- **Parameter Discovery** — Hidden parameter fuzzing with common wordlists and LLM-suggested parameters.
-- **False Positive Elimination** — Skeptical 2nd-pass AI reviewer that validates findings and adjusts severity/confidence.
-- **Exploit Chain Builder** — Links individual findings into multi-step attack paths with bounty-ready narratives.
-- **Exploitability Validation** — LLM-based validator to confirm real-world exploit potential.
-- **4 Report Formats** — JSON (machine-readable), Markdown (human-readable), SARIF (CI/CD integration), and LLM-generated bounty reports.
-- **CLI** — 6 commands: `dast`, `sast`, `recon`, `payloads`, `report`, `config`.
-- **Auto-Configuration** — Auto-detects LLM provider from environment variables. Persistent config via `~/.senshi/config.json`.
-- **Burp Integration** — Proxy support for routing traffic through Burp Suite.
-- **Test App** — Intentionally vulnerable Flask application for testing with SQLi, XSS, SSRF, IDOR, command injection, and missing auth.
-
-[0.1.0]: https://github.com/manthanghasadiya/senshi/releases/tag/v0.1.0
+- **DAST scanning** — 7 scanner modules: XSS, SSRF, Injection (SQLi/CMDi/SSTI), IDOR, Auth Bypass, Deserialization, AI Product
+- **SAST scanning** — 5 pattern scanners: Injection, Auth, Crypto, Config, AI Patterns
+- **AI-powered analysis** — LLM payload generation, response analysis, false positive filtering, exploit chain building
+- **Multi-provider LLM support** — DeepSeek, OpenAI, Groq, Ollama, Anthropic (all via OpenAI-compatible API)
+- **Smart crawling** — endpoint discovery via HTML crawling, JavaScript analysis, robots.txt, form extraction
+- **Technology detection** — fingerprint server, framework, and security headers
+- **Multiple output formats** — JSON, Markdown, SARIF
+- **Bounty report generation** — AI-generated reports for HackerOne, Bugcrowd, MSRC
+- **CLI interface** — `senshi dast`, `senshi sast`, `senshi recon`, `senshi payloads`, `senshi report`, `senshi config`
+- **Rate limiting** — configurable request throttling with burst support
+- **Custom headers and auth** — Cookie, Bearer token, custom header support
+- **Proxy support** — route traffic through Burp Suite or other proxies

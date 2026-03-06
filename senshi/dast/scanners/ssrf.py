@@ -1,11 +1,14 @@
 """
 SSRF Scanner — internal URLs, cloud metadata, DNS rebind.
+
+v0.2.0: Smart routing + heuristic checks using batch results.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from senshi.dast.crawler import DiscoveredEndpoint
 from senshi.dast.scanners.base import BaseDastScanner
 from senshi.reporters.models import Confidence, Finding, Severity, ScanMode
 from senshi.utils.logger import get_logger
@@ -14,17 +17,17 @@ logger = get_logger("senshi.dast.scanners.ssrf")
 
 # Known cloud metadata indicators
 METADATA_INDICATORS = [
-    "ami-id",
-    "instance-id",
-    "instance-type",
-    "iam",
-    "security-credentials",
-    "meta-data",
-    "user-data",
-    "computeMetadata",
-    "access-token",
-    "service-accounts",
+    "ami-id", "instance-id", "instance-type", "iam",
+    "security-credentials", "meta-data", "user-data",
+    "computeMetadata", "access-token", "service-accounts",
 ]
+
+# Param names that suggest URL input
+URL_PARAM_NAMES = {
+    "url", "uri", "link", "href", "src", "dest", "redirect",
+    "fetch", "proxy", "target", "path", "callback", "return",
+    "next", "ref", "site", "html", "feed", "to", "out",
+}
 
 
 class SsrfScanner(BaseDastScanner):
@@ -36,92 +39,82 @@ class SsrfScanner(BaseDastScanner):
     def get_vulnerability_class(self) -> str:
         return "ssrf"
 
-    def send_and_analyze(self, payloads: list[dict[str, Any]]) -> list[Finding]:
-        """Override to add SSRF-specific detection heuristics."""
-        findings = super().send_and_analyze(payloads)
-
-        endpoint = self.context.get("endpoint", "")
-        method = self.context.get("method", "GET")
-        params = self.context.get("parameters", [])
-        baseline = self.session.get_baseline(endpoint)
-
-        for payload_data in payloads:
-            value = payload_data.get("value", "")
-            injection_point = payload_data.get("injection_point", "")
-
-            if not value:
+    def filter_relevant_endpoints(
+        self, endpoints: list[DiscoveredEndpoint]
+    ) -> list[DiscoveredEndpoint]:
+        """SSRF is relevant for endpoints with URL-like parameters."""
+        relevant = []
+        for ep in endpoints:
+            if not ep.params:
                 continue
+            if any(p.lower() in URL_PARAM_NAMES for p in ep.params):
+                relevant.append(ep)
+            elif any(x in ep.url.lower() for x in ["fetch", "proxy", "redirect", "url"]):
+                relevant.append(ep)
+        return relevant  # Don't fallback — no URL params means no SSRF surface
 
-            try:
-                target_param = injection_point or (params[0] if params else "url")
+    def run_heuristics(
+        self,
+        endpoint: DiscoveredEndpoint,
+        baseline: Any,
+        payload_results: list[dict[str, Any]],
+    ) -> list[Finding]:
+        """Check for cloud metadata and internal service indicators."""
+        findings = []
+        baseline_body = baseline.body if hasattr(baseline, "body") else ""
 
-                if method.upper() == "GET":
-                    response = self.session.get(endpoint, params={target_param: value})
-                else:
-                    response = self.session.post(endpoint, data={target_param: value})
+        for pr in payload_results:
+            payload = pr.get("payload", "")
+            body = pr.get("response_body", "")
 
-                # Check for cloud metadata indicators
-                for indicator in METADATA_INDICATORS:
-                    if indicator in response.body and indicator not in baseline.body:
-                        already_found = any(
-                            f.payload == value and f.category == "ssrf"
-                            for f in findings
+            # Cloud metadata check
+            for indicator in METADATA_INDICATORS:
+                if indicator in body and indicator not in baseline_body:
+                    findings.append(
+                        Finding(
+                            title=f"SSRF — Cloud metadata access via {endpoint.url}",
+                            severity=Severity.CRITICAL,
+                            confidence=Confidence.CONFIRMED,
+                            category="ssrf",
+                            description=(
+                                f"Cloud metadata indicator '{indicator}' found. "
+                                f"Server is making requests to internal/cloud URLs."
+                            ),
+                            mode=ScanMode.DAST,
+                            endpoint=endpoint.url,
+                            method=endpoint.method,
+                            payload=payload,
+                            response_snippet=body[:500],
+                            status_code=pr.get("response_status", 0),
+                            evidence=f"Cloud metadata indicator: {indicator}",
+                            cvss_estimate=9.1,
                         )
-                        if not already_found:
-                            findings.append(Finding(
-                                title=f"SSRF — Cloud metadata access via {endpoint}",
-                                severity=Severity.CRITICAL,
-                                confidence=Confidence.CONFIRMED,
-                                category="ssrf",
-                                description=(
-                                    f"Cloud metadata indicator '{indicator}' found in response. "
-                                    f"The server is making requests to internal/cloud URLs."
-                                ),
-                                mode=ScanMode.DAST,
-                                endpoint=endpoint,
-                                method=method,
-                                payload=value,
-                                response_snippet=response.body[:500],
-                                status_code=response.status_code,
-                                evidence=f"Cloud metadata indicator: {indicator}",
-                                cvss_estimate=9.1,
-                            ))
-                            break
+                    )
+                    break
 
-                # Check for internal service indicators
-                internal_indicators = [
-                    "root:", "/etc/passwd", "localhost",
-                    "Connection refused", "No route to host",
-                ]
-                for indicator in internal_indicators:
-                    if indicator in response.body and indicator not in baseline.body:
-                        already_found = any(
-                            f.payload == value and f.category == "ssrf"
-                            for f in findings
+            # Internal service indicators
+            internal_indicators = [
+                "root:", "/etc/passwd", "Connection refused", "No route to host",
+            ]
+            for indicator in internal_indicators:
+                if indicator in body and indicator not in baseline_body:
+                    findings.append(
+                        Finding(
+                            title=f"SSRF — Internal service access via {endpoint.url}",
+                            severity=Severity.HIGH,
+                            confidence=Confidence.LIKELY,
+                            category="ssrf",
+                            description=f"Internal indicator '{indicator}' found.",
+                            mode=ScanMode.DAST,
+                            endpoint=endpoint.url,
+                            method=endpoint.method,
+                            payload=payload,
+                            response_snippet=body[:500],
+                            status_code=pr.get("response_status", 0),
+                            evidence=f"Internal indicator: {indicator}",
+                            cvss_estimate=7.5,
                         )
-                        if not already_found:
-                            findings.append(Finding(
-                                title=f"SSRF — Internal service access via {endpoint}",
-                                severity=Severity.HIGH,
-                                confidence=Confidence.LIKELY,
-                                category="ssrf",
-                                description=(
-                                    f"Internal service indicator '{indicator}' found. "
-                                    f"Server may be making internal requests."
-                                ),
-                                mode=ScanMode.DAST,
-                                endpoint=endpoint,
-                                method=method,
-                                payload=value,
-                                response_snippet=response.body[:500],
-                                status_code=response.status_code,
-                                evidence=f"Internal indicator: {indicator}",
-                                cvss_estimate=7.5,
-                            ))
-                            break
-
-            except Exception as e:
-                logger.debug(f"SSRF heuristic check failed: {e}")
-                continue
+                    )
+                    break
 
         return findings

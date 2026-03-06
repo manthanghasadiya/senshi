@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
@@ -128,32 +129,58 @@ class Brain:
         except (KeyError, IndexError) as e:
             raise BrainError(f"Failed to parse API response: {e}") from e
 
-    def _parse_json_response(self, text: str) -> dict[str, Any]:
-        """Parse JSON from LLM response, handling markdown code blocks."""
+    def _parse_json_response(self, text: str) -> dict[str, Any] | list[Any]:
+        """Extract JSON from LLM response, handling common issues.
+
+        Handles: direct JSON, markdown code blocks, trailing commas,
+        single-line comments, and embedded JSON in prose.
+        """
+        result = self._extract_json(text)
+        if result is not None:
+            return result
+        # Last resort: return empty dict rather than crashing
+        logger.warning(f"Could not extract JSON from LLM response ({len(text)} chars)")
+        return {}
+
+    @staticmethod
+    def _extract_json(text: str) -> dict[str, Any] | list[Any] | None:
+        """Robust JSON extraction with multiple fallback strategies."""
         text = text.strip()
 
-        # Strip markdown code blocks if present
-        if text.startswith("```"):
-            lines = text.split("\n")
-            # Remove first and last lines (``` markers)
-            if lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            text = "\n".join(lines)
-
+        # 1. Direct parse
         try:
             return json.loads(text)
-        except json.JSONDecodeError as e:
-            # Try to find JSON object in the response
-            start = text.find("{")
-            end = text.rfind("}") + 1
-            if start != -1 and end > start:
+        except json.JSONDecodeError:
+            pass
+
+        # 2. Strip markdown code blocks (```json ... ``` or ``` ... ```)
+        code_block = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', text, re.DOTALL)
+        if code_block:
+            try:
+                return json.loads(code_block.group(1).strip())
+            except json.JSONDecodeError:
+                pass
+
+        # 3. Find JSON object/array in text
+        for start_char, end_char in [('{', '}'), ('[', ']')]:
+            start = text.find(start_char)
+            end = text.rfind(end_char)
+            if start != -1 and end != -1 and end > start:
+                candidate = text[start:end + 1]
                 try:
-                    return json.loads(text[start:end])
+                    return json.loads(candidate)
                 except json.JSONDecodeError:
                     pass
-            raise BrainError(f"Failed to parse JSON from LLM response: {e}") from e
+                # 4. Fix common issues: trailing commas, comments
+                fixed = candidate
+                fixed = re.sub(r',\s*([}\]])', r'\1', fixed)  # trailing commas
+                fixed = re.sub(r'//.*?(?=\n|$)', '', fixed)     # single-line comments
+                try:
+                    return json.loads(fixed)
+                except json.JSONDecodeError:
+                    continue
+
+        return None
 
     def think(
         self,

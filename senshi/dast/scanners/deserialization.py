@@ -1,10 +1,10 @@
 """
 Deserialization Scanner — pickle, JSON prototype pollution, YAML, XXE.
+
+v0.2.0: Adapted to new base class (no custom overrides needed).
 """
 
 from __future__ import annotations
-
-from typing import Any
 
 from senshi.dast.scanners.base import BaseDastScanner
 from senshi.utils.logger import get_logger
