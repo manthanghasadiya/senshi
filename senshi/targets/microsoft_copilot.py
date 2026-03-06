@@ -1,39 +1,52 @@
 """
-Microsoft Copilot target configuration — Copilot-specific API mapping + auth config.
+Microsoft Copilot target profile — expanded for v0.3.0 autonomous pentesting.
 """
 
 from __future__ import annotations
 
-from typing import Any
+PROFILE = {
+    "name": "Microsoft Copilot",
+    "base_url": "https://copilot.microsoft.com",
 
-from senshi.targets.generic import GenericTarget
+    "endpoints": [
+        {"url": "/c/api/conversations", "method": "GET", "params": ["api-version"], "auth_required": True},
+        {"url": "/c/api/conversations", "method": "POST", "params": [], "auth_required": True},
+        {"url": "/c/api/conversations/{id}/history", "method": "GET", "params": ["api-version"], "auth_required": True},
+        {"url": "/c/api/conversations/{id}", "method": "DELETE", "params": [], "auth_required": True},
+        {"url": "/c/api/attachments", "method": "POST", "params": [], "auth_required": True, "content_type": "multipart"},
+        {"url": "/c/api/library/recent", "method": "GET", "params": ["limit"], "auth_required": True},
+        {"url": "/c/api/projects", "method": "GET", "params": [], "auth_required": True},
+        {"url": "/c/api/config", "method": "GET", "params": ["api-version"], "auth_required": True},
+        {"url": "/c/api/clarity/signal", "method": "POST", "params": [], "auth_required": True},
+    ],
 
+    "websocket_endpoints": [
+        {"url": "wss://copilot.microsoft.com/c/api/chat", "params": ["api-version", "clientSessionId", "accessToken"]},
+    ],
 
-class MicrosoftCopilotTarget(GenericTarget):
-    """Microsoft Copilot-specific target configuration."""
+    "auth": {
+        "type": "cookie+bearer",
+        "cookie_names": ["_EDGE_S", "MUID", "_C_Auth", "__Host-copilot-anon"],
+        "bearer_header": "authorization",
+    },
 
-    def __init__(self, url: str = "https://copilot.microsoft.com", **kwargs: Any) -> None:
-        super().__init__(url, **kwargs)
-        self.name = "Microsoft Copilot"
-        self.modules = kwargs.get("modules", [
-            "xss", "ssrf", "idor", "auth", "ai_product",
-        ])
-        self.rate_limit = kwargs.get("rate_limit", 2.0)
+    "scope": [
+        "*.copilot.microsoft.com",
+        "copilot.microsoft.com",
+        "!login.microsoftonline.com",
+        "!login.live.com",
+        "!*.login.microsoft.com",
+    ],
 
-        # Copilot-specific endpoints
-        self.api_endpoints = [
-            "/api/create",
-            "/api/turn",
-            "/api/conversations",
-            "/api/Sydney/ChatHub",
-        ]
+    "in_scope_tests": ["idor", "ssrf", "xss", "injection", "auth", "deserialization"],
+    "out_of_scope_tests": ["prompt_injection", "jailbreak"],
 
-    def get_config(self) -> dict[str, Any]:
-        config = super().get_config()
-        config["api_endpoints"] = self.api_endpoints
-        config["app_description"] = (
-            "Microsoft Copilot — AI assistant powered by LLMs. "
-            "Uses real-time conversation API with WebSocket connections. "
-            "Handles multi-turn conversations, image generation, and search."
-        )
-        return config
+    "rate_limit": 2.0,
+
+    "bounty": {
+        "program": "Microsoft AI Bounty Program",
+        "url": "https://www.microsoft.com/en-us/msrc/bounty-ai",
+        "max_bounty": "$30,000",
+        "report_url": "https://msrc.microsoft.com/report/vulnerability/new",
+    },
+}

@@ -1,6 +1,7 @@
 """
 Senshi CLI — main entry point.
 
+senshi pentest <url> [options]       # Autonomous pentesting agent (v0.3.0)
 senshi dast <url> [options]          # Scan live web endpoints
 senshi sast <path|url> [options]     # Analyze source code
 senshi recon <url> [options]         # Recon only (discover endpoints)
@@ -107,6 +108,105 @@ def dast(
 
     except Exception as e:
         print_error(f"Scan failed: {e}")
+        if verbose:
+            console.print_exception()
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def pentest(
+    url: str = typer.Argument(..., help="Target URL to pentest"),
+    provider: str = typer.Option("", help="LLM provider (deepseek|openai|groq|ollama)"),
+    model: str = typer.Option("", help="Specific model name"),
+    auth: str = typer.Option("", help='Primary auth header (e.g., "Cookie: session=abc")'),
+    auth2: str = typer.Option("", help='Secondary account auth (for IDOR testing)'),
+    header: list[str] = typer.Option([], help="Custom headers (repeatable)"),
+    proxy: str = typer.Option("", help="Proxy URL (e.g., http://127.0.0.1:8080)"),
+    target_profile: str = typer.Option("", help="Target profile (copilot|openai|salesforce)"),
+    max_iterations: int = typer.Option(50, help="Max agent loop iterations"),
+    rate_limit: float = typer.Option(1.0, help="Min seconds between requests"),
+    output: str = typer.Option("", help="Output file path (.json)"),
+    verbose: bool = typer.Option(False, "--verbose", help="Show detailed output"),
+    timeout: float = typer.Option(10.0, help="HTTP request timeout in seconds"),
+    browser: bool = typer.Option(False, "--browser", help="Enable Playwright browser exploitation"),
+    ws: bool = typer.Option(False, "--ws", help="Enable WebSocket testing"),
+    strict: bool = typer.Option(False, "--strict", help="No exploit = no report (strict mode)"),
+    stealth: bool = typer.Option(False, "--stealth", help="Stealth mode (random delays, UA rotation)"),
+    scope: str = typer.Option("", help='Scope rules (comma-separated, prefix ! to exclude)'),
+    budget: int = typer.Option(0, help="Max LLM calls (0 = unlimited)"),
+    har: str = typer.Option("", help="Export HTTP traffic to HAR file"),
+) -> None:
+    """Run autonomous pentest agent — Think → Act → Observe loop."""
+    import asyncio
+    from senshi.core.config import SenshiConfig
+    from senshi.core.session import Session
+    from senshi.ai.brain import Brain
+    from senshi.agent.pentest_agent import PentestAgent
+    from senshi.utils.logger import setup_global_logging
+
+    print_banner()
+    setup_global_logging(verbose)
+
+    # Build config
+    config = SenshiConfig.load()
+    if provider:
+        config.provider = provider
+    if model:
+        config.model = model
+    if auth:
+        config.auth = auth
+    if proxy:
+        config.proxy = proxy
+    config.rate_limit = rate_limit
+    config.timeout = timeout
+    config.verbose = verbose
+
+    # Parse headers
+    for h in header:
+        if ":" in h:
+            key, _, value = h.partition(":")
+            config.headers[key.strip()] = value.strip()
+
+    config.__post_init__()
+
+    try:
+        brain = Brain(config)
+        session = Session(
+            base_url=url,
+            auth=config.auth,
+            proxy=config.proxy,
+            headers=config.headers,
+            rate_limit=config.rate_limit,
+            timeout=config.timeout,
+        )
+
+        agent = PentestAgent(
+            target=url,
+            brain=brain,
+            session=session,
+            max_iterations=max_iterations,
+            strict_mode=strict,
+            budget=budget,
+            browser_enabled=browser,
+            ws_enabled=ws,
+            stealth=stealth,
+            auth2=auth2,
+            target_profile=target_profile,
+            output=output,
+        )
+
+        result = asyncio.run(agent.run())
+
+        if har:
+            from senshi.core.evidence import EvidenceCollector
+            collector = EvidenceCollector()
+            collector.export_har(har)
+            print_success(f"HAR exported to: {har}")
+
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        print_error(f"Pentest failed: {e}")
         if verbose:
             console.print_exception()
         raise typer.Exit(code=1)

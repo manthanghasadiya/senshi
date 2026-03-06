@@ -86,6 +86,13 @@ class Finding(BaseModel):
     llm_reasoning: str = ""
     chain_potential: str = ""
 
+    # v0.3.0 — PoC and exploit confirmation
+    poc_curl: str = ""
+    poc_python: str = ""
+    poc_steps: list[str] = Field(default_factory=list)
+    screenshot_path: str = ""
+    confirmed: bool = False
+
     timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
 
     def to_dict(self) -> dict[str, Any]:
