@@ -207,7 +207,7 @@ class PentestContext:
     def _findings_summary(self) -> str:
         if not self.findings:
             return "FINDINGS: None"
-        lines = ["CONFIRMED_FINDINGS (do not retest these):"]
+        lines = ["✅ CONFIRMED — move on (do not retest these):"]
         for f in self.findings:
             lines.append(f"  - {f.title} on {f.endpoint} — {f.category} confirmed")
         return "\n".join(lines)
@@ -218,7 +218,7 @@ class PentestContext:
         
         lines = []
         if self.failed_tests:
-            lines.append("RECENT FAILED TESTS (do not repeat these exact combinations):")
+            lines.append("⚠️ DO NOT REPEAT — FAILED TESTS (never retest these endpoint+vuln_type combinations):")
             for ft in self.failed_tests[-5:]:
                 lines.append(f"  ✗ [{ft['action']}] {ft['endpoint']} for {ft['vuln_type']}: {ft['reason']}")
             lines.append("")

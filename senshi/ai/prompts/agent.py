@@ -38,6 +38,11 @@ Choose the SINGLE most valuable next action. Consider:
 - Can you build on any previous findings?
 - What would a senior bug bounty hunter do next?
 
+CRITICAL INSTRUCTIONS:
+- NEVER repeat a test on an endpoint+vuln_type combination that has already FAILED.
+- NEVER retest a confirmed finding. If an endpoint is vulnerable to XSS, move on to a different endpoint or vulnerability class.
+- Focus on untested combinations of high-risk endpoints, parameters, and vulnerability types.
+
 OUTPUT FORMAT (strict JSON, no markdown):
 {{
     "action": "action_name",

@@ -2,6 +2,17 @@
 
 All notable changes to Senshi are documented here.
 
+## [0.3.1] — 2026-03-07
+
+### 🐛 Agent Loop Fixes
+- **AgentModeScanner**: Bypassed strict DAST endpoint filtering during the autonomous agent loop to ensure LLM-selected endpoints are actually tested.
+- **Robust Parameter Extraction**: URL query strings and known fallback parameters are inherently tested even if the reconnaissance crawler missed them.
+- **Deterministic Fuzzer Fallback**: The deterministic pre-fuzzer is automatically executed as a fallback if the LLM's payload variations fail to find anything on an endpoint.
+- **Improved Context Memory**: Aggressive filtering instructions explicitly prevent the agent from infinitely retesting failed payload combinations or previously confirmed findings.
+- **Enhanced Vulnerability Detection**: Added detection patterns for SQLite errors and Command Injection root paths. Fixed XSS payload reflection detection logic.
+
+---
+
 ## [0.3.0] — 2026-03-06
 
 ### 🤖 Autonomous Pentesting Agent
