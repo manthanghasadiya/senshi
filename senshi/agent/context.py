@@ -206,31 +206,40 @@ class PentestContext:
 
     def _findings_summary(self) -> str:
         if not self.findings:
-            return "FINDINGS: None"
-        lines = ["✅ CONFIRMED — move on (do not retest these):"]
+            return "CONFIRMED FINDINGS: None yet"
+        
+        lines = ["✅ CONFIRMED FINDINGS (do not retest these endpoints for these vuln types):"]
         for f in self.findings:
-            lines.append(f"  - {f.title} on {f.endpoint} — {f.category} confirmed")
+            lines.append(f"  ✓ {f.category.upper()} on {f.endpoint} — CONFIRMED")
         return "\n".join(lines)
 
     def _observations_summary(self) -> str:
-        if not self.observations and not self.failed_tests:
-            return "RECENT OBSERVATIONS: None"
-        
         lines = []
+        
+        # Make failed tests VERY prominent
         if self.failed_tests:
-            lines.append("⚠️ DO NOT REPEAT — FAILED TESTS (never retest these endpoint+vuln_type combinations):")
-            for ft in self.failed_tests[-5:]:
-                lines.append(f"  ✗ [{ft['action']}] {ft['endpoint']} for {ft['vuln_type']}: {ft['reason']}")
+            lines.append("⛔ BLOCKED COMBINATIONS — DO NOT TEST THESE AGAIN:")
+            
+            # Group by endpoint+vuln_type to show clearly
+            tested_combos = set()
+            for ft in self.failed_tests:
+                combo = f"{ft.get('endpoint', '?')} + {ft.get('vuln_type', '?')}"
+                tested_combos.add(combo)
+            
+            for combo in list(tested_combos)[-10:]:  # Last 10
+                lines.append(f"  ⛔ {combo}: ALREADY TESTED, NO ISSUES")
+            
             lines.append("")
-
+            lines.append("  → Choose an endpoint+vuln_type combination NOT in the list above")
+            lines.append("")
+        
         if self.observations:
-            recent = self.observations[-10:]
             lines.append("RECENT OBSERVATIONS:")
-            for obs in recent:
+            for obs in self.observations[-5:]:
                 mark = "⚠" if obs.is_interesting else "ℹ"
-                lines.append(f"  {mark} [{obs.action_type}] {obs.target}: {obs.result_summary}")
-                
-        return "\n".join(lines)
+                lines.append(f"  {mark} {obs.result_summary}")
+        
+        return "\n".join(lines) if lines else ""
 
     def _compressed_summary(self) -> str:
         """Compressed summary when context is too large."""

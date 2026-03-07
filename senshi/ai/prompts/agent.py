@@ -32,22 +32,20 @@ ACTION_SELECTION_PROMPT = """You are an autonomous penetration tester analyzing 
 
 {available_actions}
 
-Choose the SINGLE most valuable next action. Consider:
-- What has NOT been tested yet?
-- Which endpoints have user-controllable input?
-- Can you build on any previous findings?
-- What would a senior bug bounty hunter do next?
+DECISION RULES:
+1. Look at "BLOCKED COMBINATIONS" above — NEVER select any of those endpoint+vuln_type pairs
+2. Look at "CONFIRMED FINDINGS" — NEVER retest those
+3. Prioritize endpoints with user input parameters (?, &, form fields)
+4. Test high-impact vulns first: auth bypass > SSRF > SQLi/CMDi > IDOR > XSS
+5. If all reasonable combinations have been tested, return {{"action": "done"}}
 
-CRITICAL INSTRUCTIONS:
-- NEVER repeat a test on an endpoint+vuln_type combination that has already FAILED.
-- NEVER retest a confirmed finding. If an endpoint is vulnerable to XSS, move on to a different endpoint or vulnerability class.
-- Focus on untested combinations of high-risk endpoints, parameters, and vulnerability types.
+Your job is to find NEW vulnerabilities, not repeat failed tests.
 
 OUTPUT FORMAT (strict JSON, no markdown):
 {{
     "action": "action_name",
-    "params": {{"param1": "value1"}},
-    "reasoning": "1-2 sentence explanation of why this is the best next step"
+    "params": {{"endpoint": "...", "vuln_type": "..."}},
+    "reasoning": "why this specific combination hasn't been tried and is high-value"
 }}
 """
 

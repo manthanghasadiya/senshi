@@ -135,6 +135,7 @@ def pentest(
     scope: str = typer.Option("", help='Scope rules (comma-separated, prefix ! to exclude)'),
     budget: int = typer.Option(0, help="Max LLM calls (0 = unlimited)"),
     har: str = typer.Option("", help="Export HTTP traffic to HAR file"),
+    fast: bool = typer.Option(False, "--fast", help="Fast mode — fewer LLM calls, more aggressive batching"),
 ) -> None:
     """Run autonomous pentest agent — Think → Act → Observe loop."""
     import asyncio
@@ -184,7 +185,8 @@ def pentest(
             target=url,
             brain=brain,
             session=session,
-            max_iterations=max_iterations,
+            max_iterations=max_iterations if not fast else 20,
+            fast_mode=fast,
             strict_mode=strict,
             budget=budget,
             browser_enabled=browser,
