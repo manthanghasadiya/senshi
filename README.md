@@ -31,17 +31,17 @@ Traditional scanners fire generic payloads and drown you in false positives. Sen
 
 | Feature | Description |
 |---------|-------------|
+| **Autonomous Pentesting** | Think \u2192 Act \u2192 Observe LLM agent loop with browser execution |
 | **DAST** | Crawl, probe, inject, and analyze live endpoints |
 | **SAST** | Deep source code analysis with multi-language support |
 | **7 DAST Scanners** | XSS, SSRF, IDOR, SQLi/CMDi/SSTI, Auth bypass, Deserialization, AI Product |
 | **5 SAST Scanners** | Injection, Auth, Crypto, Config, AI pattern detection |
 | **Auto-Recon** | Endpoint discovery, JS analysis, tech fingerprinting |
-| **Browser Recon** | Headless Chromium captures XHR/fetch for hidden API endpoints |
+| **Browser Recon & Testing**| Headless Chromium captures traffic and confirms vulnerabilities via Playwright |
 | **Smart Routing** | Scanners only run on relevant endpoints (~2x speedup) |
 | **Batch Analysis** | 1 LLM call per endpoint per scanner (~6x fewer API calls) |
-| **Progressive Save** | Results saved to disk as found — Ctrl+C preserves findings |
+| **Progressive Save** | Results saved to disk as found \u2014 Ctrl+C preserves findings |
 | **4 Output Formats** | JSON, Markdown, SARIF (CI/CD), Bounty Report |
-| **Burp Integration** | Route traffic through your proxy |
 
 ## Installation
 
@@ -54,7 +54,7 @@ Or from source:
 ```bash
 git clone https://github.com/manthanghasadiya/senshi.git
 cd senshi
-pip install -e ".[dev]"
+pip install -e ".[dev,browser,websocket]"
 ```
 
 ## Quick Start
@@ -70,7 +70,10 @@ export DEEPSEEK_API_KEY="sk-..."
 ### 2. Scan
 
 ```bash
-# DAST — scan live targets
+# Autonomous Black-Box Pentest (v0.3.0)
+senshi pentest https://target.com --provider deepseek --browser --verbose
+
+# DAST \u2014 scan live targets
 senshi dast https://target.com --provider deepseek
 
 # With auth + Burp proxy
@@ -105,6 +108,7 @@ senshi report findings.json --platform hackerone --output report.md
 
 | Command | Description |
 |---------|-------------|
+| `senshi pentest <url>` | Run autonomous pentest agent |
 | `senshi dast <url>` | Scan live web endpoints |
 | `senshi sast <path>` | Analyze source code (dir, git URL, or zip) |
 | `senshi recon <url>` | Discover endpoints (no scanning) |

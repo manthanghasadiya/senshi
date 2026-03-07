@@ -170,7 +170,7 @@ def pentest(
     config.__post_init__()
 
     try:
-        brain = Brain(config)
+        brain = Brain(config=config)
         session = Session(
             base_url=url,
             auth=config.auth,

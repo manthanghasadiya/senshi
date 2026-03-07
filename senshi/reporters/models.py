@@ -129,15 +129,23 @@ class ScanState:
         self.start_time = datetime.now().isoformat()
         self.status = "running"
         self.llm_calls = 0
+        self._seen_findings: set[tuple[str, str, str]] = set()
 
     def add_finding(self, finding: Finding) -> None:
         """Add finding and immediately save to disk."""
-        self.findings.append(finding)
-        self._save()
+        dedup_key = (finding.endpoint, finding.category, finding.payload)
+        if dedup_key not in self._seen_findings:
+            self._seen_findings.add(dedup_key)
+            self.findings.append(finding)
+            self._save()
 
     def add_findings(self, findings: list[Finding]) -> None:
         """Add multiple findings and save."""
-        self.findings.extend(findings)
+        for finding in findings:
+            dedup_key = (finding.endpoint, finding.category, finding.payload)
+            if dedup_key not in self._seen_findings:
+                self._seen_findings.add(dedup_key)
+                self.findings.append(finding)
         self._save()
 
     def mark_endpoint_done(self, endpoint: str) -> None:

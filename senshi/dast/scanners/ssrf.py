@@ -43,15 +43,27 @@ class SsrfScanner(BaseDastScanner):
         self, endpoints: list[DiscoveredEndpoint]
     ) -> list[DiscoveredEndpoint]:
         """SSRF is relevant for endpoints with URL-like parameters."""
+        from urllib.parse import urlparse, parse_qs
+        
         relevant = []
         for ep in endpoints:
-            if not ep.params:
+            all_params = set(ep.params)
+            
+            # Parse params from URL in case the agent supplied them directly
+            parsed = urlparse(ep.url)
+            query_params = parse_qs(parsed.query)
+            all_params.update(query_params.keys())
+            
+            # Update the endpoint object so the payload is injected correctly
+            ep.params = list(all_params)
+            
+            if not all_params:
                 continue
-            if any(p.lower() in URL_PARAM_NAMES for p in ep.params):
+            if any(p.lower() in URL_PARAM_NAMES for p in all_params):
                 relevant.append(ep)
             elif any(x in ep.url.lower() for x in ["fetch", "proxy", "redirect", "url"]):
                 relevant.append(ep)
-        return relevant  # Don't fallback — no URL params means no SSRF surface
+        return relevant
 
     def run_heuristics(
         self,

@@ -284,16 +284,23 @@ class Crawler:
         source: str = "crawl",
     ) -> None:
         """Add an endpoint if not already discovered."""
+        from urllib.parse import urlparse, parse_qs
+        
+        # Extract query parameters from URL
+        parsed = urlparse(url)
+        query_params = list(parse_qs(parsed.query).keys())
+        all_params = list(set((params or []) + query_params))
+        
         # Check for duplicates
         for existing in self._endpoints:
             if existing.url == url and existing.method == method:
                 # Merge params
-                if params:
-                    for p in params:
+                if all_params:
+                    for p in all_params:
                         if p not in existing.params:
                             existing.params.append(p)
                 return
 
         self._endpoints.append(
-            DiscoveredEndpoint(url=url, method=method, params=params, source=source)
+            DiscoveredEndpoint(url=url, method=method, params=all_params, source=source)
         )

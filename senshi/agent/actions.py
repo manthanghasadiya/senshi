@@ -18,6 +18,24 @@ from senshi.utils.logger import get_logger, console
 logger = get_logger("senshi.agent.actions")
 
 
+VULN_TYPE_ALIASES = {
+    "sqli": "injection",
+    "sql_injection": "injection", 
+    "sql": "injection",
+    "cmdi": "injection",
+    "command_injection": "injection",
+    "rce": "injection",
+    "xss": "xss",
+    "ssrf": "ssrf",
+    "idor": "idor",
+    "auth": "auth",
+    "auth_bypass": "auth",
+    "deserialization": "deserialization",
+    "open_redirect": "xss",
+    "ssti": "injection",
+}
+
+
 # ── Data models ──────────────────────────────────────────────
 
 @dataclass
@@ -30,9 +48,13 @@ class Action:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Action:
+        params = data.get("params", {})
+        if "vuln_type" in params:
+            params["vuln_type"] = VULN_TYPE_ALIASES.get(params["vuln_type"].lower(), params["vuln_type"])
+            
         return cls(
             type=data.get("action", data.get("type", "done")),
-            params=data.get("params", {}),
+            params=params,
             reasoning=data.get("reasoning", ""),
         )
 

@@ -38,6 +38,8 @@ Review each finding critically. For findings from the same scan, consider:
 3. Is the overall finding pattern consistent with real vulnerabilities?
 4. Are confidence and severity levels proportionate?
 
+IMPORTANT: Do NOT reject findings if the evidence clearly shows the payload was successfully injected and reflected (e.g., `<script>` tags in HTML) or executed (e.g., SQL syntax errors). Only reject if the application behavior is definitively benign.
+
 FINDINGS:
 {findings_json}
 

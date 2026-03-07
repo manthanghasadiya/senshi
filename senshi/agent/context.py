@@ -63,6 +63,7 @@ class PentestContext:
         self.observations: list[Observation] = []
         self.tests_performed: list[TestRecord] = []
         self.findings: list[Finding] = []
+        self.failed_tests: list[dict[str, str]] = []
 
         # Stats
         self.iteration: int = 0
@@ -93,7 +94,10 @@ class PentestContext:
         ))
 
     def add_finding(self, finding: Finding) -> None:
-        """Add a confirmed finding."""
+        """Add a confirmed finding (deduplicated)."""
+        for f in self.findings:
+            if f.endpoint == finding.endpoint and f.category == finding.category and f.payload == finding.payload:
+                return
         self.findings.append(finding)
 
     def mark_tested(self, endpoint: str, vuln_type: str,
@@ -203,20 +207,29 @@ class PentestContext:
     def _findings_summary(self) -> str:
         if not self.findings:
             return "FINDINGS: None"
-        lines = [f"FINDINGS ({len(self.findings)}):"]
+        lines = ["CONFIRMED_FINDINGS (do not retest these):"]
         for f in self.findings:
-            lines.append(f"  [{f.severity.value.upper()}] {f.title}")
+            lines.append(f"  - {f.title} on {f.endpoint} — {f.category} confirmed")
         return "\n".join(lines)
 
     def _observations_summary(self) -> str:
-        if not self.observations:
+        if not self.observations and not self.failed_tests:
             return "RECENT OBSERVATIONS: None"
-        # Show last 10
-        recent = self.observations[-10:]
-        lines = ["RECENT OBSERVATIONS:"]
-        for obs in recent:
-            mark = "⚠" if obs.is_interesting else "ℹ"
-            lines.append(f"  {mark} [{obs.action_type}] {obs.target}: {obs.result_summary}")
+        
+        lines = []
+        if self.failed_tests:
+            lines.append("RECENT FAILED TESTS (do not repeat these exact combinations):")
+            for ft in self.failed_tests[-5:]:
+                lines.append(f"  ✗ [{ft['action']}] {ft['endpoint']} for {ft['vuln_type']}: {ft['reason']}")
+            lines.append("")
+
+        if self.observations:
+            recent = self.observations[-10:]
+            lines.append("RECENT OBSERVATIONS:")
+            for obs in recent:
+                mark = "⚠" if obs.is_interesting else "ℹ"
+                lines.append(f"  {mark} [{obs.action_type}] {obs.target}: {obs.result_summary}")
+                
         return "\n".join(lines)
 
     def _compressed_summary(self) -> str:
