@@ -43,3 +43,11 @@ tests/vuln_app/test.db
 
 # Distribution
 *.tar.gz
+
+# Testing & Local Output
+ignore_this/
+senshi_dast_*.json
+architecture.html
+endpoints.json
+findings.json
+report.md

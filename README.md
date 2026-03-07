@@ -157,42 +157,29 @@ senshi report findings.json --platform hackerone --output report.md
 
 ## Architecture
 
-```
-senshi/
-├── ai/                     # AI Core
-│   ├── brain.py            # Universal LLM interface (robust JSON extraction)
-│   ├── prompts/            # Security-focused system prompts
-│   ├── payload_gen.py      # Context-aware payload generator
-│   ├── response_analyzer.py # Batch response analysis (v0.2.0)
-│   ├── code_analyzer.py
-│   ├── false_positive_filter.py
-│   ├── chain_builder.py
-│   └── report_writer.py
-├── core/
-│   ├── config.py           # Auto-detect providers from env vars
-│   ├── session.py          # HTTP session (auth, proxy, rate limiting)
-│   └── engine.py           # Main scan orchestrator (smart routing, progressive save)
-├── dast/
-│   ├── crawler.py          # Endpoint discovery + LLM JS analysis
-│   ├── browser_recon.py    # Playwright headless browser recon (v0.2.0)
-│   ├── tech_detector.py    # Tech stack fingerprinting
-│   ├── param_discovery.py  # Hidden parameter fuzzing
-│   ├── scanners/           # 7 DAST scanner modules (smart routing)
-│   └── validators/         # Exploitability validation
-├── sast/
-│   ├── repo_loader.py      # Load from dir, git, zip
-│   ├── file_parser.py      # Multi-language parser
-│   ├── dependency_analyzer.py
-│   ├── context_builder.py
-│   └── scanners/           # 5 SAST scanner modules
-├── reporters/
-│   ├── models.py           # Finding + ScanResult + ScanState (Pydantic)
-│   ├── json_report.py
-│   ├── markdown_report.py
-│   ├── sarif_report.py
-│   └── bounty_report.py
-├── targets/                # Target-specific configs
-└── cli.py                  # Typer CLI
+## Architecture
+
+Senshi operates on an autonomous **Think \u2192 Act \u2192 Observe** loop, building context across iterations:
+
+```mermaid
+graph TD
+    Start([senshi pentest]) --> Recon[Automated Recon]
+    Recon --> Loop
+    
+    subgraph Agent Loop
+    Loop((Pentest Context)) --> Think[AgentPlanner: Decide Next Action]
+    Think --> Act[ActionExecutor]
+    Act --> Scanners[DAST Scanners]
+    Act --> Browser[Browser Exploiter]
+    Act --> Custom[IDOR / WS / Auth]
+    Scanners --> Observe[Analyze & Update Context]
+    Browser --> Observe
+    Custom --> Observe
+    Observe --> Loop
+    end
+    
+    Think -->|Task Complete| PoC[PoC Generation]
+    PoC --> Report([Final Report & Chains])
 ```
 
 ## Development
