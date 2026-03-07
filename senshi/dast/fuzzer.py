@@ -60,7 +60,7 @@ FUZZ_PAYLOADS = {
 DETECT_PATTERNS = {
     "sqli": [
         "sql syntax", "mysql", "postgresql", "ora-", "sqlstate",
-        "unclosed quotation", "unterminated string",
+        "unclosed quotation", "unterminated string", "sqlite3", "near \"",
     ],
     "xss": [
         "<script>alert(1)</script>", "onerror=alert(1)", "{{49}}",
@@ -69,7 +69,7 @@ DETECT_PATTERNS = {
         "root:x:0:0:", "bin/bash", "[fonts]", "for 16-bit",
     ],
     "cmdi": [
-        "uid=", "gid=", "groups=",
+        "uid=", "gid=", "groups=", "root", "www-data",
     ],
     "ssrf": [
         "ami-id", "instance-id", "iam/security-credentials",
@@ -124,23 +124,38 @@ class DeterministicFuzzer:
 
                         # Check for detection patterns
                         body_lower = response.body.lower()
-                        for pattern in detect:
-                            if pattern.lower() in body_lower:
-                                findings.append(Finding(
-                                    title=f"{vuln_type.upper()} detected in {param} — {technique}",
-                                    severity=self._severity_for(vuln_type),
-                                    confidence=Confidence.LIKELY,
-                                    category=vuln_type,
-                                    description=f"Deterministic fuzzing found {vuln_type} via {technique}",
-                                    mode=ScanMode.DAST,
-                                    endpoint=url,
-                                    method=method,
-                                    payload=f"{param}={payload_value}",
-                                    status_code=response.status_code,
-                                    response_snippet=response.body[:300],
-                                    evidence=f"Pattern matched: {pattern}",
-                                ))
-                                break
+                        pattern_found = False
+                        
+                        # Explicit XSS reflection check
+                        if vuln_type == "xss":
+                            import html
+                            if payload_value in response.body:
+                                pattern_found = True
+                                pattern_name = "Payload explicitly reflected unencoded"
+
+                        if not pattern_found:
+                            for pattern in detect:
+                                if pattern.lower() in body_lower:
+                                    pattern_found = True
+                                    pattern_name = f"Pattern matched: {pattern}"
+                                    break
+
+                        if pattern_found:
+                            findings.append(Finding(
+                                title=f"{vuln_type.upper()} detected in {param} — {technique}",
+                                severity=self._severity_for(vuln_type),
+                                confidence=Confidence.LIKELY,
+                                category=vuln_type,
+                                description=f"Deterministic fuzzing found {vuln_type} via {technique}",
+                                mode=ScanMode.DAST,
+                                endpoint=url,
+                                method=method,
+                                payload=f"{param}={payload_value}",
+                                status_code=response.status_code,
+                                response_snippet=response.body[:300],
+                                evidence=pattern_name,
+                            ))
+                            continue
 
                         # Check response diff
                         is_diff, reason = self.differ.quick_diff(baseline.body, response.body)
