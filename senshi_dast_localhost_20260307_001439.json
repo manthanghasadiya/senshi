@@ -1,8 +1,0 @@
-{
-  "status": "interrupted",
-  "start_time": "2026-03-07T00:14:39.023062",
-  "findings_count": 0,
-  "scanned_endpoints": [],
-  "llm_calls": 13,
-  "findings": []
-}
