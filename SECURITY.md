@@ -1,18 +1,8 @@
 # Security Policy
 
-## Supported Versions
-
-| Version | Supported |
-|---------|-----------|
-| 0.1.x   | ✅         |
-
 ## Reporting a Vulnerability
 
 If you discover a security vulnerability in Senshi itself, please report it responsibly.
-
-**Do NOT open a public GitHub issue.**
-
-Instead, please email: **manthan@ghasadiya.com**
 
 Include:
 - Description of the vulnerability
