@@ -38,16 +38,23 @@ desktop.ini
 *.db
 tests/vuln_app/test.db
 
-# Logs
+# Logs and Debug
 *.log
-
-# Distribution
-*.tar.gz
+*.txt
+scan_output.txt
+cmd_out.txt
+pentest.log
 
 # Testing & Local Output
 ignore_this/
-senshi_dast_*.json
+*.json
+!pyproject.toml
 architecture.html
-endpoints.json
-findings.json
 report.md
+
+# Distribution
+dist/
+build/
+*.egg-info/
+*.tar.gz
+*.whl
