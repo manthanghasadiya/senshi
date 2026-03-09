@@ -128,15 +128,9 @@ class Session:
         path = path if path.startswith("/") else f"/{path}"
         return f"{self.base_url}{path}"
 
-    def get(self, path: str, params: dict[str, str] | None = None, skip_auth: bool = False, allow_redirects: bool = True) -> Response:
+    def get(self, path: str, params: dict[str, str] | None = None, skip_auth: bool = False, allow_redirects: bool = True, **kwargs) -> Response:
         """Send GET request (sync)."""
-        self._rate_limiter.wait()
-        url = self._resolve_url(path)
-
-        with httpx.Client(**self._build_client_kwargs(skip_auth=skip_auth, allow_redirects=allow_redirects)) as client:
-            response = client.get(url, params=params)
-            self.request_count += 1
-            return Response.from_httpx(response)
+        return self.request("GET", path, params=params, skip_auth=skip_auth, allow_redirects=allow_redirects, **kwargs)
 
     def post(
         self,
@@ -146,15 +140,13 @@ class Session:
         content: str | None = None,
         skip_auth: bool = False,
         allow_redirects: bool = True,
+        **kwargs
     ) -> Response:
         """Send POST request (sync)."""
-        self._rate_limiter.wait()
-        url = self._resolve_url(path)
-
-        with httpx.Client(**self._build_client_kwargs(skip_auth=skip_auth, allow_redirects=allow_redirects)) as client:
-            response = client.post(url, data=data, json=json_data, content=content)
-            self.request_count += 1
-            return Response.from_httpx(response)
+        return self.request(
+            "POST", path, data=data, json_data=json_data, content=content, 
+            skip_auth=skip_auth, allow_redirects=allow_redirects, **kwargs
+        )
 
     def request(
         self,
@@ -163,9 +155,11 @@ class Session:
         params: dict[str, str] | None = None,
         data: dict[str, Any] | None = None,
         json_data: dict[str, Any] | None = None,
+        content: str | None = None,
         headers: dict[str, str] | None = None,
         skip_auth: bool = False,
         allow_redirects: bool = True,
+        **kwargs
     ) -> Response:
         """Send arbitrary HTTP request."""
         self._rate_limiter.wait()
@@ -176,7 +170,9 @@ class Session:
             client_kwargs["headers"] = {**client_kwargs["headers"], **headers}
 
         with httpx.Client(**client_kwargs) as client:
-            response = client.request(method, url, params=params, data=data, json=json_data)
+            response = client.request(
+                method, url, params=params, data=data, json=json_data, content=content, **kwargs
+            )
             self.request_count += 1
             return Response.from_httpx(response)
 

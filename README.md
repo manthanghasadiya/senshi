@@ -34,7 +34,7 @@ Traditional scanners fire generic payloads and drown you in false positives. Sen
 | **Autonomous Pentesting** | Think \u2192 Act \u2192 Observe LLM agent loop with browser execution |
 | **DAST** | Crawl, probe, inject, and analyze live endpoints |
 | **SAST** | Deep source code analysis with multi-language support |
-| **7 DAST Scanners** | XSS, SSRF, IDOR, SQLi/CMDi/SSTI, Auth bypass, Deserialization, AI Product |
+| **10+ DAST Scanners** | XSS, SSRF, IDOR, SQLi, CMDi, SSTI, Open Redirect, Auth bypass, Deserialization, Info Disclosure |
 | **5 SAST Scanners** | Injection, Auth, Crypto, Config, AI pattern detection |
 | **Auto-Recon** | Endpoint discovery, JS analysis, tech fingerprinting |
 | **Browser Recon & Testing**| Headless Chromium captures traffic and confirms vulnerabilities via Playwright |

@@ -1,7 +1,7 @@
 """
 Senshi CLI — main entry point.
 
-senshi pentest <url> [options]       # Autonomous pentesting agent (v0.3.0)
+senshi pentest <url> [options]       # Autonomous pentesting agent (v0.5.0)
 senshi dast <url> [options]          # Scan live web endpoints
 senshi sast <path|url> [options]     # Analyze source code
 senshi recon <url> [options]         # Recon only (discover endpoints)
@@ -60,6 +60,8 @@ def dast(
     verbose: bool = typer.Option(False, "--verbose", help="Show detailed output"),
     max_payloads: int = typer.Option(15, help="Max payloads per scanner"),
     timeout: float = typer.Option(10.0, help="HTTP request timeout in seconds"),
+    depth: int = typer.Option(2, help="Crawl depth"),
+    browser: bool = typer.Option(False, "--browser", help="Use headless browser for discovery"),
     endpoints: str = typer.Option("", help="Path to endpoints file (from 'senshi recon')"),
 ) -> None:
     """Run a DAST scan against a live target."""
@@ -101,8 +103,9 @@ def dast(
         engine = ScanEngine(config)
         result = engine.run_dast(
             url,
-            modules=module_list,
-            max_payloads=max_payloads,
+            modules=modules or "all",
+            depth=depth,
+            browser=browser,
             output=output or None,
         )
 

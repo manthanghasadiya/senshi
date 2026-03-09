@@ -26,6 +26,10 @@ For each test result, determine if it's a REAL vulnerability:
 
 **XSS:**
 - Real: Payload reflected unencoded AND Content-Type is text/html
+- CRITICAL: ONLY report XSS if the payload contains actual JavaScript execution vectors.
+- Valid XSS payloads: <script>, <img...onerror=, <svg...onload=, javascript:, <iframe, <body...onload=
+- NOT XSS: SQLi payloads (' " OR UNION), CMDi payloads (| ; $ `), plain text reflection
+- Ask: "Would this execute JavaScript in a victim's browser?" If no, it's not XSS.
 - False positive: Payload in JSON/XML (not exploitable)
 - False positive: Payload is HTML-encoded
 
@@ -101,7 +105,29 @@ class BatchAnalyzer:
             type_findings = self._analyze_group(vuln_type, type_results)
             findings.extend(type_findings)
         
-        return findings
+        # Post-processing: Deduplicate and final filters
+        unique_findings = self._deduplicate_findings(findings)
+        return unique_findings
+
+    def _deduplicate_findings(self, findings: list[Finding]) -> list[Finding]:
+        """Remove duplicate findings based on key attributes."""
+        seen = set()
+        unique = []
+        
+        for f in findings:
+            # Create a key from unique attributes (base endpoint, category, title)
+            base_url = f.endpoint.split("?")[0]
+            key = (
+                base_url,
+                f.category,
+                f.title,
+            )
+            
+            if key not in seen:
+                seen.add(key)
+                unique.append(f)
+        
+        return unique
     
     def _analyze_group(self, vuln_type: str, results: list) -> list[Finding]:
         """Analyze a group of results for one vuln type."""
@@ -166,6 +192,13 @@ class BatchAnalyzer:
                     if not r:
                         continue
                     
+                    payload_str = f"{r.param}={r.payload}" if r.param else r.payload
+                    
+                    # Programmatic FP Filter for XSS
+                    if r.vuln_type == "xss":
+                        if not self._is_valid_xss_payload(r.payload):
+                            continue
+
                     all_findings.append(Finding(
                         title=f.get("title", f"{r.vuln_type} in {r.endpoint}"),
                         severity=self._parse_severity(f.get("severity", "high")),
@@ -175,7 +208,7 @@ class BatchAnalyzer:
                         mode=ScanMode.DAST,
                         endpoint=r.endpoint,
                         method=r.method,
-                        payload=f"{r.param}={r.payload}" if r.param else r.payload,
+                        payload=payload_str,
                         status_code=r.test_status,
                         response_snippet=r.test_body[:500],
                         evidence=f.get("evidence", ""),
@@ -187,6 +220,18 @@ class BatchAnalyzer:
         
         return all_findings
     
+    def _is_valid_xss_payload(self, payload: str) -> bool:
+        """Check if payload is actually an XSS payload."""
+        xss_indicators = [
+            "<script", "</script>",
+            "onerror=", "onload=", "onclick=", "onmouseover=",
+            "javascript:",
+            "<img", "<svg", "<body", "<iframe", "<input",
+            "onfocus=", "onblur=",
+        ]
+        payload_lower = payload.lower()
+        return any(ind in payload_lower for ind in xss_indicators)
+
     def _extract_json(self, text: str) -> str:
         """Extract JSON from LLM response."""
         # Find JSON block

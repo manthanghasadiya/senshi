@@ -74,21 +74,36 @@ def _generate_output_path(url: str) -> str:
 class ScanEngine:
     """Main scan orchestrator — DAST + SAST."""
 
-    def __init__(self, config: SenshiConfig) -> None:
-        self.config = config
-        self.brain = Brain(
-            provider=config.provider,
-            model=config.model or None,
-            api_key=config.api_key or None,
-            config=config,
-        )
+    def __init__(self, config: SenshiConfig | None = None) -> None:
+        self.config = config or SenshiConfig.load()
+        self.brain = Brain(config=self.config)
+        
+        # Load vulnerability modules
+        from senshi.modules import VULNERABILITY_MODULES
+        self._module_classes = VULNERABILITY_MODULES
         self._scan_state: ScanState | None = None
+
+    def _load_modules(self, session: Session) -> list:
+        """Load all vulnerability detection modules."""
+        modules = []
+        for name, module_class in self._module_classes.items():
+            try:
+                module = module_class(
+                    session=session,
+                    brain=self.brain,
+                    callback_server=getattr(self.config, "callback_server", None),
+                )
+                modules.append(module)
+            except Exception as e:
+                logger.warning(f"Failed to load module {name}: {e}")
+        return modules
 
     def run_dast(
         self,
         url: str,
-        modules: list[str] | None = None,
-        max_payloads: int = 15,
+        modules: str = "all",
+        depth: int = 2,
+        browser: bool = False,
         output: str | None = None,
     ) -> ScanResult:
         """
@@ -120,23 +135,14 @@ class ScanEngine:
                 base_url=url,
                 auth=self.config.auth,
                 proxy=self.config.proxy,
-                rate_limit=self.config.rate_limit,
-                timeout=self.config.timeout,
             )
-
-            # Phase 1: Tech detection
-            console.print("\n[bold cyan]Phase 1:[/bold cyan] Detecting technology stack...")
-            tech_detector = TechDetector(session)
-            tech_info = tech_detector.detect()
-            tech_summary = tech_detector.get_summary(tech_info)
-            print_success(f"Tech stack: {tech_summary}")
-
-            # Phase 2: Crawl endpoints
-            console.print("\n[bold cyan]Phase 2:[/bold cyan] Discovering endpoints...")
-            crawler = Crawler(session, brain=self.brain)
+            # Phase 1: Discovery
+            console.print(f"\n[bold cyan]Phase 1:[/bold cyan] Discovering endpoints for {url}...")
+            from senshi.dast.crawler import Crawler
+            crawler = Crawler(session, brain=self.brain, max_depth=depth)
             endpoints = crawler.crawl()
             result.endpoints_discovered = len(endpoints)
-            print_success(f"Found {len(endpoints)} endpoints")
+            print_success(f"Discovered {len(endpoints)} unique endpoints")
 
             if not endpoints:
                 print_error("No endpoints discovered, cannot scan")
@@ -148,23 +154,48 @@ class ScanEngine:
                 params_str = f" ({', '.join(ep.params)})" if ep.params else ""
                 console.print(f"  [dim]{ep.method:4s} {ep.url}{params_str}[/dim]")
 
-            # Phase 3: Deterministic Coverage Scan
-            console.print("\n[bold cyan]Phase 3:[/bold cyan] Running deterministic coverage scan...")
-            from senshi.dast.coverage_scanner import CoverageScanner
+            # Phase 2: Tech Profiling
+            console.print("\n[bold cyan]Phase 2:[/bold cyan] Fingerprinting technology stack...")
+            from senshi.dast.tech_detector import TechDetector
+            tech_detector = TechDetector(session)
+            tech_info = tech_detector.detect()
+            tech_stack = tech_detector.get_summary(tech_info)
+            print_success(f"Tech stack: {tech_stack}")
+
+            # Phase 3: Modular Scanning
+            console.print("\n[bold cyan]Phase 3:[/bold cyan] Running modular vulnerability scans...")
+            all_findings = []
+            
+            # Load and filter modules
+            active_modules = self._load_modules(session)
+            if modules != "all":
+                target_modules = [m.strip() for m in modules.split(",")]
+                active_modules = [m for m in active_modules if m.name in target_modules]
+
+            for ep in endpoints:
+                # Convert ep to dict format expected by modules if needed
+                ep_dict = {
+                    "url": ep.url if hasattr(ep, "url") else ep.get("url"),
+                    "method": ep.method if hasattr(ep, "method") else ep.get("method", "GET"),
+                    "params": ep.params if hasattr(ep, "params") else ep.get("params", []),
+                    "content_type": ep.content_type if hasattr(ep, "content_type") else ep.get("content_type", "text/html"),
+                }
+                
+                for module in active_modules:
+                    applicability = module.is_applicable(ep_dict, tech_info)
+                    if applicability >= 0.3: # Threshold for applicability
+                        console.print(f"[dim]Testing {module.name} on {ep_dict['method']} {ep_dict['url']}...[/dim]")
+                        findings = module.test(ep_dict, tech_info)
+                        all_findings.extend(findings)
+
+            # Phase 4: Deduplicate and sort
             from senshi.ai.batch_analyzer import BatchAnalyzer
-            
-            scanner = CoverageScanner(session)
-            test_results = scanner.scan_all(endpoints)
-            print_success(f"Completed {len(test_results)} tests across all endpoints")
-            
-            # Phase 4: Batch LLM Analysis
-            console.print("\n[bold cyan]Phase 4:[/bold cyan] Analyzing results with LLM...")
             analyzer = BatchAnalyzer(self.brain)
-            all_findings = analyzer.analyze(test_results)
-            print_success(f"Analysis complete: found {len(all_findings)} vulnerabilities")
+            unique_findings = analyzer._deduplicate_findings(all_findings)
+            print_success(f"Analysis complete: found {len(unique_findings)} vulnerabilities")
             
             # Phase 5: Build chains
-            if len(all_findings) >= 2:
+            if len(unique_findings) >= 2: # Use unique_findings for chain building
                 console.print("\n[bold cyan]Phase 5:[/bold cyan] Building exploit chains...")
                 chain_builder = ChainBuilder(self.brain)
                 chains = chain_builder.build_chains(all_findings, target_description=url)
