@@ -148,44 +148,24 @@ class ScanEngine:
                 params_str = f" ({', '.join(ep.params)})" if ep.params else ""
                 console.print(f"  [dim]{ep.method:4s} {ep.url}{params_str}[/dim]")
 
-            # Phase 3: Run scanners with smart routing
-            console.print("\n[bold cyan]Phase 3:[/bold cyan] Running scanners...")
-            active_modules = modules or list(DAST_SCANNERS.keys())
-            # Deduplicate (ai and ai_product point to same class)
-            seen_classes: set[type] = set()
-            all_findings: list[Finding] = []
-
-            for module_name in active_modules:
-                scanner_class = DAST_SCANNERS.get(module_name)
-                if not scanner_class or scanner_class in seen_classes:
-                    continue
-                seen_classes.add(scanner_class)
-
-                console.print(f"\n[bold yellow]▶ {module_name.upper()}[/bold yellow]")
-
-                def on_finding(f: Finding) -> None:
-                    if self._scan_state:
-                        self._scan_state.add_finding(f)
-
-                scanner = scanner_class(
-                    session=session,
-                    brain=self.brain,
-                    endpoints=endpoints,
-                    tech_summary=tech_summary,
-                    max_payloads=max_payloads,
-                    rate_limit=self.config.rate_limit,
-                    on_finding=on_finding,
-                )
-
-                try:
-                    findings = scanner.scan()
-                    all_findings.extend(findings)
-                except Exception as e:
-                    logger.warning(f"{module_name} failed: {e}")
-
-            # Phase 4: Build chains
+            # Phase 3: Deterministic Coverage Scan
+            console.print("\n[bold cyan]Phase 3:[/bold cyan] Running deterministic coverage scan...")
+            from senshi.dast.coverage_scanner import CoverageScanner
+            from senshi.ai.batch_analyzer import BatchAnalyzer
+            
+            scanner = CoverageScanner(session)
+            test_results = scanner.scan_all(endpoints)
+            print_success(f"Completed {len(test_results)} tests across all endpoints")
+            
+            # Phase 4: Batch LLM Analysis
+            console.print("\n[bold cyan]Phase 4:[/bold cyan] Analyzing results with LLM...")
+            analyzer = BatchAnalyzer(self.brain)
+            all_findings = analyzer.analyze(test_results)
+            print_success(f"Analysis complete: found {len(all_findings)} vulnerabilities")
+            
+            # Phase 5: Build chains
             if len(all_findings) >= 2:
-                console.print("\n[bold cyan]Phase 4:[/bold cyan] Building exploit chains...")
+                console.print("\n[bold cyan]Phase 5:[/bold cyan] Building exploit chains...")
                 chain_builder = ChainBuilder(self.brain)
                 chains = chain_builder.build_chains(all_findings, target_description=url)
                 result.chains = chains

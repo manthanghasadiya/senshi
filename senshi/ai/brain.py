@@ -415,6 +415,35 @@ class Brain:
 
         return [r if r is not None else ("Error: no response" if not json_schema else {"error": "no response"}) for r in results]
 
+    def batch_analyze_fuzz_results(self, context: dict) -> dict:
+        """
+        Analyze all fuzz results in a single LLM call.
+
+        This is the core intelligence — the LLM understands:
+        - Endpoint context (what does /ping do vs /fetch)
+        - Content-type implications (JSON vs HTML)
+        - Real vulns vs false positives
+        """
+        from senshi.ai.prompts.response_analysis import BATCH_FUZZ_ANALYSIS_PROMPT
+
+        prompt = BATCH_FUZZ_ANALYSIS_PROMPT.format(
+            endpoint=context["endpoint"],
+            method=context["method"],
+            params=context["params"],
+            baseline_status=context["baseline"]["status"],
+            baseline_content_type=context["baseline"]["content_type"],
+            baseline_body=context["baseline"]["body_preview"],
+            results_json=json.dumps(context["results"], indent=2),
+        )
+
+        response = self.think(
+            system_prompt="You are an expert penetration tester analyzing HTTP responses.",
+            user_prompt=prompt,
+            json_schema={"type": "object"},
+        )
+
+        return self._parse_json_response(response) if isinstance(response, str) else response
+
     def get_stats(self) -> dict[str, Any]:
         """Return usage statistics."""
         return {

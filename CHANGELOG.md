@@ -2,6 +2,25 @@
 
 All notable changes to Senshi are documented here.
 
+## [0.4.0] — 2026-03-09
+
+### 🧬 Hybrid Scanning Architecture
+- **Deterministic Testing Pipeline** — separated payload delivery from analysis to eliminate LLM variance in coverage.
+- **CoverageScanner (Deterministic)** — systematic testing of all endpoints with fixed, proven payload sets for XSS, SQLi, SSRF, and CMDi.
+- **BatchAnalyzer (AI-Driven)** — batch evaluation of raw test results using specialized LLM reasoning for high-precision vuln verification.
+- **Improved Reliability** — 100% reproducible test execution while maintaining human-like intelligent response analysis.
+
+### 🛡️ Expanded Vulnerability Coverage
+- **Autonomous Access Control Testing** — systematic discovery and testing of IDOR and Broken Authentication issues.
+- **Information Disclosure Detection** — automated identification of secrets, keys, and PII in response bodies.
+- **Path Traversal & SSTI** — dedicated scanners for template injection and directory traversal vulnerabilities.
+- **Open Redirect Scanner** — identified via automated injection of external validation URLs.
+
+### ⚡ Performance & Accuracy
+- **Batch Analysis Optimization** — reduced LLM token usage by grouping results by vulnerability type.
+- **Zero Variance Mode** — ensured consistent findings across multiple runs against the same target.
+- **Context-Aware Reasoning** — AI now differentiates between echo, fetch, and execute behaviors based on content-type and response structure.
+
 ## [0.3.1] — 2026-03-07
 
 ### 🐛 Agent Loop Fixes

@@ -26,26 +26,47 @@ PRIORITIZATION ORDER:
 7. Information disclosure
 """
 
-ACTION_SELECTION_PROMPT = """You are an autonomous penetration tester analyzing a live target.
+ACTION_SELECTION_PROMPT = """You are an autonomous penetration tester.
 
+## TARGET STATE
 {context_summary}
 
-{available_actions}
+## AVAILABLE ACTIONS
 
-DECISION RULES:
-1. Look at "BLOCKED COMBINATIONS" above — NEVER select any of those endpoint+vuln_type pairs
-2. Look at "CONFIRMED FINDINGS" — NEVER retest those
-3. Prioritize endpoints with user input parameters (?, &, form fields)
-4. Test high-impact vulns first: auth bypass > SSRF > SQLi/CMDi > IDOR > XSS
-5. If all reasonable combinations have been tested, return {{"action": "done"}}
+**Injection Testing:**
+- scan_endpoint(endpoint, vuln_type): Test for XSS, SQLi, SSRF, CMDi
+- fuzz_parameter(endpoint, param): Targeted fuzzing
 
-Your job is to find NEW vulnerabilities, not repeat failed tests.
+**Access Control Testing:**
+- test_idor(endpoint): Change IDs to access other users' data
+- test_auth(endpoint): Check if sensitive endpoint requires authentication
+- test_info_disclosure(endpoint): Look for leaked secrets/keys
+- test_open_redirect(endpoint, param): Test redirect parameters
 
-OUTPUT FORMAT (strict JSON, no markdown):
+**Control:**
+- done: All valuable tests completed
+
+## SMART PRIORITIZATION
+
+Match action to endpoint:
+- `/api/users/1` → test_idor (has ID in path)
+- `/admin/users` → test_auth (admin endpoint)
+- `/api/config` → test_info_disclosure (config endpoint)
+- `/redirect?url=` → test_open_redirect (has redirect param)
+- `/search?q=` → scan_endpoint(sqli)
+- `/greet?name=` → scan_endpoint(xss)
+- `/fetch?url=` → scan_endpoint(ssrf)
+- `/ping?host=` → scan_endpoint(cmdi)
+
+## BLOCKED (already tested)
+{blocked_combinations}
+
+## OUTPUT (JSON)
 {{
-    "action": "action_name",
-    "params": {{"endpoint": "...", "vuln_type": "..."}},
-    "reasoning": "why this specific combination hasn't been tried and is high-value"
+  "thinking": "what's the highest value untested action",
+  "action": "action_name",
+  "params": {{"endpoint": "...", ...}},
+  "reasoning": "why this is valuable"
 }}
 """
 

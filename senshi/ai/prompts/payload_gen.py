@@ -11,7 +11,15 @@ TARGET CONTEXT:
 - Application type: {app_description}
 - Previous findings on this target: {previous_findings}
 
-TASK: Generate {count} payloads to test for {vulnerability_class}.
+STEP 1: ANALYZE THE ENDPOINT
+Before generating payloads, analyze what this endpoint likely does:
+- Path suggestion: (/search = database, /ping = command, /fetch = URL/SSRF)
+- Parameter suggestion: (q = query, url = fetch, host = command)
+- What vulnerabilities are MOST LIKELY here?
+
+STEP 2: GENERATE {count} TARGETED PAYLOADS
+Based on your analysis, generate surgical payloads for {vulnerability_class}.
+Avoid generic sprays. Be specific to this endpoint and tech stack.
 
 REQUIREMENTS:
 - Each payload must be SPECIFIC to this endpoint and tech stack
@@ -19,10 +27,11 @@ REQUIREMENTS:
 - Design to DETECT, not exploit (proof of concept, not damage)
 - Consider WAF bypass techniques relevant to {tech_stack}
 - Include both simple and complex/encoded payloads
-- Consider the parameter type and expected input format
 
 OUTPUT FORMAT (strict JSON):
 {{
+  "endpoint_analysis": "what this endpoint does",
+  "primary_vuln_type": "the most likely vulnerability",
   "payloads": [
     {{
       "value": "the actual payload string",

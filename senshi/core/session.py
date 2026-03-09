@@ -71,25 +71,29 @@ class Session:
             burst=3,
         )
 
-        # Build headers
-        self._headers: dict[str, str] = {
+        # Build default headers
+        self._default_headers: dict[str, str] = {
             "User-Agent": get_random_user_agent(),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
         }
         if headers:
-            self._headers.update(headers)
+            self._default_headers.update(headers)
 
-        # Parse auth
-        self._cookies: dict[str, str] = cookies or {}
+        self._default_cookies: dict[str, str] = cookies or {}
+        
+        # Auth info
+        self._auth_headers: dict[str, str] = {}
+        self._auth_cookies: dict[str, str] = {}
+        
         if auth:
             auth_info = parse_auth_header(auth)
             if auth_info["type"] == "bearer":
-                self._headers["Authorization"] = f"Bearer {auth_info['value']}"
+                self._auth_headers["Authorization"] = f"Bearer {auth_info['value']}"
             elif auth_info["type"] == "cookie":
-                self._cookies.update(parse_cookies(auth_info["value"]))
+                self._auth_cookies.update(parse_cookies(auth_info["value"]))
             elif auth_info["type"] == "header":
-                self._headers[auth_info["key"]] = auth_info["value"]
+                self._auth_headers[auth_info["key"]] = auth_info["value"]
 
         # Baseline cache
         self._baselines: dict[str, Response] = {}
@@ -97,14 +101,21 @@ class Session:
         # Stats
         self.request_count = 0
 
-    def _build_client_kwargs(self) -> dict[str, Any]:
+    def _build_client_kwargs(self, skip_auth: bool = False, allow_redirects: bool = True) -> dict[str, Any]:
         """Build kwargs for httpx client."""
+        headers = {**self._default_headers}
+        cookies = {**self._default_cookies}
+        
+        if not skip_auth:
+            headers.update(self._auth_headers)
+            cookies.update(self._auth_cookies)
+            
         kwargs: dict[str, Any] = {
             "timeout": self.timeout,
             "verify": self.verify_ssl,
-            "headers": self._headers,
-            "cookies": self._cookies,
-            "follow_redirects": True,
+            "headers": headers,
+            "cookies": cookies,
+            "follow_redirects": allow_redirects,
         }
         if self.proxy:
             kwargs["proxy"] = self.proxy
@@ -117,12 +128,12 @@ class Session:
         path = path if path.startswith("/") else f"/{path}"
         return f"{self.base_url}{path}"
 
-    def get(self, path: str, params: dict[str, str] | None = None) -> Response:
+    def get(self, path: str, params: dict[str, str] | None = None, skip_auth: bool = False, allow_redirects: bool = True) -> Response:
         """Send GET request (sync)."""
         self._rate_limiter.wait()
         url = self._resolve_url(path)
 
-        with httpx.Client(**self._build_client_kwargs()) as client:
+        with httpx.Client(**self._build_client_kwargs(skip_auth=skip_auth, allow_redirects=allow_redirects)) as client:
             response = client.get(url, params=params)
             self.request_count += 1
             return Response.from_httpx(response)
@@ -133,12 +144,14 @@ class Session:
         data: dict[str, Any] | None = None,
         json_data: dict[str, Any] | None = None,
         content: str | None = None,
+        skip_auth: bool = False,
+        allow_redirects: bool = True,
     ) -> Response:
         """Send POST request (sync)."""
         self._rate_limiter.wait()
         url = self._resolve_url(path)
 
-        with httpx.Client(**self._build_client_kwargs()) as client:
+        with httpx.Client(**self._build_client_kwargs(skip_auth=skip_auth, allow_redirects=allow_redirects)) as client:
             response = client.post(url, data=data, json=json_data, content=content)
             self.request_count += 1
             return Response.from_httpx(response)
@@ -151,29 +164,28 @@ class Session:
         data: dict[str, Any] | None = None,
         json_data: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
+        skip_auth: bool = False,
+        allow_redirects: bool = True,
     ) -> Response:
         """Send arbitrary HTTP request."""
         self._rate_limiter.wait()
         url = self._resolve_url(path)
 
-        extra_headers = {**self._headers}
+        client_kwargs = self._build_client_kwargs(skip_auth=skip_auth, allow_redirects=allow_redirects)
         if headers:
-            extra_headers.update(headers)
-
-        client_kwargs = self._build_client_kwargs()
-        client_kwargs["headers"] = extra_headers
+            client_kwargs["headers"] = {**client_kwargs["headers"], **headers}
 
         with httpx.Client(**client_kwargs) as client:
             response = client.request(method, url, params=params, data=data, json=json_data)
             self.request_count += 1
             return Response.from_httpx(response)
 
-    async def async_get(self, path: str, params: dict[str, str] | None = None) -> Response:
+    async def async_get(self, path: str, params: dict[str, str] | None = None, skip_auth: bool = False, allow_redirects: bool = True) -> Response:
         """Send GET request (async)."""
         await self._rate_limiter.async_wait()
         url = self._resolve_url(path)
 
-        async with httpx.AsyncClient(**self._build_client_kwargs()) as client:
+        async with httpx.AsyncClient(**self._build_client_kwargs(skip_auth=skip_auth, allow_redirects=allow_redirects)) as client:
             response = await client.get(url, params=params)
             self.request_count += 1
             return Response.from_httpx(response)
@@ -183,12 +195,14 @@ class Session:
         path: str,
         data: dict[str, Any] | None = None,
         json_data: dict[str, Any] | None = None,
+        skip_auth: bool = False,
+        allow_redirects: bool = True,
     ) -> Response:
         """Send POST request (async)."""
         await self._rate_limiter.async_wait()
         url = self._resolve_url(path)
 
-        async with httpx.AsyncClient(**self._build_client_kwargs()) as client:
+        async with httpx.AsyncClient(**self._build_client_kwargs(skip_auth=skip_auth, allow_redirects=allow_redirects)) as client:
             response = await client.post(url, data=data, json=json_data)
             self.request_count += 1
             return Response.from_httpx(response)
@@ -201,17 +215,16 @@ class Session:
         data: dict[str, Any] | None = None,
         json_data: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
+        skip_auth: bool = False,
+        allow_redirects: bool = True,
     ) -> Response:
         """Send arbitrary async HTTP request."""
         await self._rate_limiter.async_wait()
         url = self._resolve_url(path)
 
-        extra_headers = {**self._headers}
+        client_kwargs = self._build_client_kwargs(skip_auth=skip_auth, allow_redirects=allow_redirects)
         if headers:
-            extra_headers.update(headers)
-
-        client_kwargs = self._build_client_kwargs()
-        client_kwargs["headers"] = extra_headers
+            client_kwargs["headers"] = {**client_kwargs["headers"], **headers}
 
         async with httpx.AsyncClient(**client_kwargs) as client:
             response = await client.request(method, url, params=params, data=data, json=json_data)
@@ -241,4 +254,4 @@ class Session:
 
     def rotate_user_agent(self) -> None:
         """Rotate to a new random User-Agent."""
-        self._headers["User-Agent"] = get_random_user_agent()
+        self._default_headers["User-Agent"] = get_random_user_agent()

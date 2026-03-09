@@ -137,3 +137,90 @@ OUTPUT FORMAT (strict JSON):
 }}
 
 If NO vulnerabilities found, return: {{"findings": []}}"""
+
+
+BATCH_FUZZ_ANALYSIS_PROMPT = """You are analyzing fuzz test results for security vulnerabilities.
+
+## ENDPOINT CONTEXT
+- URL: {endpoint}
+- Method: {method}
+- Parameters: {params}
+
+## BASELINE RESPONSE (normal behavior)
+- Status: {baseline_status}
+- Content-Type: {baseline_content_type}
+- Body preview: {baseline_body}
+
+## FUZZ RESULTS
+{results_json}
+
+## YOUR TASK
+
+Analyze each result and determine if it represents a REAL vulnerability.
+
+### ANALYSIS RULES
+
+**1. UNDERSTAND THE ENDPOINT FIRST**
+Before analyzing payloads, infer what this endpoint does:
+- `/search`, `/query` → likely database query
+- `/ping`, `/exec`, `/run` → likely command execution
+- `/fetch`, `/load`, `/proxy` → likely URL fetching
+- `/greet`, `/comment` → likely reflects input in HTML
+
+**2. XSS ANALYSIS**
+- REQUIRES Content-Type to be text/html (or missing/ambiguous)
+- If Content-Type is application/json or application/xml → NOT VULNERABLE (reflection in JSON is not XSS)
+- Check if payload is reflected WITHOUT encoding
+
+**3. SSRF ANALYSIS**
+- REQUIRES evidence the server ATTEMPTED to fetch the URL
+- Evidence of fetch: connection errors, timeouts, DNS failures, content from target
+- NOT SSRF if: URL is just echoed back in a field like "query" or "url" without fetch attempt
+- Endpoints named /ping with param "host" are COMMAND EXECUTION, not SSRF
+
+**4. SQLi ANALYSIS**
+- Look for database errors: syntax error, SQL, query, ORA-, PG::, etc.
+- The error should be CAUSED by the payload (compare to baseline)
+- Stack traces mentioning database code are strong evidence
+
+**5. CMDi ANALYSIS**
+- Look for command output: uid=, gid=, groups= (from id command), directory listings, file contents
+- Look for shell errors: command not found, permission denied
+- Endpoints with params like "host", "cmd", "exec" are likely command injection targets
+
+**6. FALSE POSITIVE PREVENTION**
+For each potential finding, ask:
+- Is this actually exploitable or just a reflection?
+- Does the Content-Type support this attack?
+- Is the endpoint type consistent with this vulnerability?
+- Would a senior pentester consider this real?
+
+## OUTPUT FORMAT
+
+Return a JSON object with findings:
+
+{{
+  "endpoint_analysis": "what this endpoint appears to do based on URL/params",
+  "findings": [
+    {{
+      "payload_index": 0,
+      "param": "param_name",
+      "vuln_type": "xss|sqli|ssrf|cmdi|path_traversal",
+      "is_vulnerable": true,
+      "confidence": "confirmed|likely|possible",
+      "severity": "critical|high|medium|low",
+      "title": "descriptive title",
+      "evidence": "specific evidence from response",
+      "reasoning": "why this is a real vulnerability"
+    }}
+  ],
+  "false_positives_avoided": [
+    {{
+      "payload_index": 5,
+      "reason": "Content-Type is JSON, XSS not exploitable"
+    }}
+  ]
+}}
+
+If no vulnerabilities found, return: {{"endpoint_analysis": "...", "findings": [], "false_positives_avoided": []}}
+"""

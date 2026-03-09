@@ -84,50 +84,19 @@ class ActionResult:
 # ── Available actions ────────────────────────────────────────
 
 AVAILABLE_ACTIONS = {
-    "scan_endpoint": {
-        "description": "Test an endpoint for a specific vulnerability type",
-        "params": {"endpoint": "URL to test", "vuln_type": "xss|sqli|ssrf|idor|auth|cmdi|ssti"},
-    },
-    "fuzz_parameter": {
-        "description": "Fuzz a specific parameter with targeted payloads",
-        "params": {"endpoint": "URL", "param": "parameter name", "payload_type": "injection|boundary|format"},
-    },
-    "test_auth": {
-        "description": "Test authentication and authorization on an endpoint",
-        "params": {"endpoint": "URL to test"},
-    },
-    "test_idor": {
-        "description": "Test for IDOR by manipulating object IDs",
-        "params": {"endpoint": "URL with ID", "id_param": "parameter or path segment with ID"},
-    },
-    "test_ssrf": {
-        "description": "Test for SSRF with callback detection",
-        "params": {"endpoint": "URL", "url_param": "parameter that accepts URLs"},
-    },
-    "browser_test": {
-        "description": "Run Playwright browser test for client-side vulnerabilities",
-        "params": {"url": "URL to visit", "test_type": "xss_confirm|csrf|auth_bypass|open_redirect"},
-    },
-    "websocket_test": {
-        "description": "Test a WebSocket endpoint",
-        "params": {"ws_url": "WebSocket URL", "test_type": "auth|injection|rate_limit"},
-    },
-    "explore_endpoint": {
-        "description": "Send benign requests to discover more about an endpoint",
-        "params": {"url": "URL to explore"},
-    },
-    "test_graphql": {
-        "description": "Test a GraphQL endpoint via introspection and targeted queries",
-        "params": {"endpoint": "GraphQL URL"},
-    },
-    "escalate": {
-        "description": "Attempt to escalate a confirmed finding to higher impact",
-        "params": {"finding_index": "index of finding to escalate"},
-    },
-    "done": {
-        "description": "Finish testing — all high-value tests have been performed",
-        "params": {},
-    },
+    # Existing injection testing
+    "scan_endpoint": "Test endpoint for XSS, SQLi, SSRF, CMDi vulnerabilities",
+    "fuzz_parameter": "Fuzz a specific parameter with targeted payloads",
+    "explore_endpoint": "Discover endpoint behavior and parameters",
+    
+    # NEW: Access control testing
+    "test_idor": "Test for IDOR by changing numeric/UUID IDs in URL path",
+    "test_auth": "Test if endpoint requires authentication (try without auth)",
+    "test_info_disclosure": "Check response for leaked secrets, API keys, internal data",
+    "test_open_redirect": "Test redirect/url parameters for open redirect",
+    
+    # Control
+    "done": "Finish testing when all high-value tests are complete",
 }
 
 

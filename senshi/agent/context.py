@@ -159,6 +159,18 @@ class PentestContext:
             all_params.update(ep.get("params", []))
         return ", ".join(sorted(all_params)[:30]) if all_params else "none discovered"
 
+    @property
+    def blocked_summary(self) -> str:
+        """Get a summary of blocked combinations for the LLM."""
+        if not self.failed_tests:
+            return "None"
+        combos = set()
+        for ft in self.failed_tests:
+            endpoint = ft.get("endpoint", "?")
+            vuln_type = ft.get("vuln_type", "?")
+            combos.add(f"{endpoint} + {vuln_type}")
+        return "\n".join(f"- {c}" for c in sorted(combos))
+
     def _tech_summary(self) -> str:
         if not self.tech_stack:
             return "TECH STACK: Unknown"
@@ -172,19 +184,70 @@ class PentestContext:
         if not self.endpoints:
             return "ENDPOINTS: None discovered"
         lines = [f"ENDPOINTS ({len(self.endpoints)} total):"]
-        # Show untested first, limit to 20
-        untested = [ep for ep in self.endpoints if not self._is_fully_tested(ep)]
-        tested = [ep for ep in self.endpoints if self._is_fully_tested(ep)]
+        
+        # Untested first
+        sorted_eps = sorted(
+            self.endpoints,
+            key=lambda e: self._is_fully_tested(e),
+        )
 
-        for ep in untested[:15]:
-            params = ", ".join(ep.get("params", []))
-            mark = " [UNTESTED]"
-            lines.append(f"  {ep.get('method', 'GET'):4s} {ep['url']}"
-                         f"{' (' + params + ')' if params else ''}{mark}")
+        for ep in sorted_eps[:20]:
+            params = ep.get("params", [])
+            param_str = ", ".join(params)
+            
+            # Infer likely vulns
+            likely = self._infer_likely_vulns(ep["url"], params)
+            
+            mark = " [UNTESTED]" if not self._is_fully_tested(ep) else " [TESTED]"
+            lines.append(f"  {ep.get('method', 'GET'):4s} {ep['url']} {mark}")
+            if params:
+                lines.append(f"    Params: {param_str}")
+            lines.append(f"    Likely vulnerabilities: {', '.join(likely)}")
 
-        if tested:
-            lines.append(f"  ... and {len(tested)} fully tested endpoints")
         return "\n".join(lines)
+
+    def _infer_likely_vulns(self, url: str, params: list[str]) -> list[str]:
+        """Infer likely vulnerabilities from endpoint characteristics."""
+        import re
+        
+        likely = []
+        url_lower = url.lower()
+        param_str = " ".join(params).lower() if params else ""
+        
+        # Injection vulns (existing)
+        if any(x in param_str for x in ["q", "query", "search", "id", "filter"]):
+            likely.append("sqli")
+        if any(x in param_str for x in ["name", "title", "text", "message"]):
+            likely.append("xss")
+        if any(x in param_str for x in ["url", "uri", "link", "href", "src"]):
+            likely.append("ssrf")
+        if any(x in param_str for x in ["host", "ip", "cmd", "command", "exec"]):
+            likely.append("cmdi")
+        
+        # NEW: Access control vulns
+        
+        # IDOR: URL has numeric or UUID path segment
+        if re.search(r'/\d+(/|$|\?)', url):
+            likely.append("idor")
+        if re.search(r'/[a-f0-9-]{36}(/|$|\?)', url, re.I):
+            likely.append("idor")
+        
+        # Missing auth: sensitive-looking endpoints
+        if any(x in url_lower for x in ["/admin", "/manage", "/config", "/internal", "/debug", "/users"]):
+            likely.append("auth")
+        
+        # Info disclosure: config/debug endpoints
+        if any(x in url_lower for x in ["/config", "/env", "/debug", "/health", "/info", "/status"]):
+            likely.append("info_disclosure")
+        
+        # Open redirect: redirect-related params
+        if any(x in param_str for x in ["url", "redirect", "next", "return", "goto", "dest", "target", "continue"]):
+            likely.append("open_redirect")
+        
+        if not likely:
+            likely = ["xss", "sqli"]
+        
+        return likely
 
     def _tests_summary(self) -> str:
         if not self.tests_performed:

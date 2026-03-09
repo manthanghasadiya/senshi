@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from senshi.agent.actions import Action, get_actions_prompt
+from senshi.agent.actions import Action
 from senshi.agent.context import PentestContext
 from senshi.ai.brain import Brain
 from senshi.ai.prompts.agent import (
@@ -53,7 +53,7 @@ class AgentPlanner:
         # Build prompt
         user_prompt = ACTION_SELECTION_PROMPT.format(
             context_summary=context.get_summary(),
-            available_actions=get_actions_prompt(),
+            blocked_combinations=context.blocked_summary,
         )
 
         try:
