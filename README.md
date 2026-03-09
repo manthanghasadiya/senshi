@@ -70,7 +70,7 @@ export DEEPSEEK_API_KEY="sk-..."
 ### 2. Scan
 
 ```bash
-# Autonomous Black-Box Pentest (v0.3.0)
+# Autonomous Black-Box Pentest (v0.5.0)
 senshi pentest https://target.com --provider deepseek --browser --verbose
 
 # DAST \u2014 scan live targets
@@ -116,17 +116,18 @@ senshi report findings.json --platform hackerone --output report.md
 | `senshi report <file>` | Generate bounty report from findings JSON |
 | `senshi config` | Configure API keys and settings |
 
-## DAST Scanners
-
 | Scanner | Vulnerability Types |
 |---------|-------------------|
-| `xss` | Reflected, stored, DOM, markdown injection |
-| `ssrf` | Cloud metadata, internal services, DNS rebind |
-| `idor` | ID enumeration, path-based access control |
-| `injection` | SQLi (error + blind), command injection, SSTI |
-| `auth` | Auth bypass, method switching, header bypass |
-| `deserialization` | Prototype pollution, pickle, YAML, XXE |
-| `ai_product` | Prompt injection, data leakage, cross-user |
+| `ssti` | Template injection (Jinja, Twig, etc.) |
+| `deserialization` | Insecure object handling (Java, PHP, Python) |
+| `cmdi` | OS Command Injection (Unix/Windows) |
+| `sqli` | SQL Injection (Error, Boolean, Blind) |
+| `xss` | Reflected, context-aware payload testing |
+| `ssrf` | Cloud metadata & OOB callbacks |
+| `idor` | Parameter manipulation & resource enumeration |
+| `auth` | Missing auth on sensitive endpoints |
+| `open_redirect` | Unvalidated external redirections |
+| `info_disclosure` | Regex-based secret detection |
 
 ## SAST Scanners
 
