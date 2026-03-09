@@ -302,42 +302,118 @@ class ScanEngine:
                 print_success(f"Found {len(chains)} exploit chains")
 
         result.completed_at = datetime.now().isoformat()
+        
+        # Print final results table for SAST
+        self._print_final_summary(result.findings, result.chains)
+        
         return result
 
     def _deduplicate_sast_findings(self, findings: list[Finding]) -> list[Finding]:
         """
-        Deduplicate findings from multiple SAST scanners.
+        Deduplicate findings from multiple SAST scanners (Aggressive).
         
-        Key: (file_path, line_number, category, normalized_title)
+        Key: (filename, vuln_type)
         Keep: Highest severity version
         """
+        severity_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        
         # Sort by severity (highest first) so we keep the most severe
         sorted_findings = sorted(
             findings,
-            key=lambda f: f.severity.rank,
-            reverse=True
+            key=lambda f: severity_rank.get(str(f.severity.value).lower(), 4)
         )
         
         seen = set()
         unique = []
         
         for f in sorted_findings:
-            # Normalize title for comparison
-            title_normalized = self._normalize_title(f.title)
+            # Normalize key - just vuln type, ignore title variations
+            vuln_type = self._normalize_for_dedup(f)
             
-            # Create dedup key
-            key = (
-                f.file_path,
-                f.line_number if f.line_number else 0,
-                f.category.lower() if f.category else "",
-                title_normalized,
-            )
+            # Also normalize file path (just filename)
+            filename = (f.file_path or "").split("/")[-1].split("\\")[-1]
+            
+            key = (filename, vuln_type)
             
             if key not in seen:
                 seen.add(key)
                 unique.append(f)
         
         return unique
+
+    def _normalize_for_dedup(self, finding: Finding) -> str:
+        """Create normalized key for deduplication."""
+        title = (finding.title or "").lower()
+        
+        # Extract just the vuln type, ignore endpoint variations
+        vuln_keywords = {
+            "sql injection": "sqli",
+            "sqli": "sqli",
+            "xss": "xss",
+            "cross-site scripting": "xss",
+            "reflected xss": "xss",
+            "ssrf": "ssrf",
+            "server-side request forgery": "ssrf",
+            "command injection": "cmdi",
+            "cmdi": "cmdi",
+            "idor": "idor",
+            "insecure direct object": "idor",
+            "missing auth": "auth",
+            "authentication": "auth",
+            "hardcoded secret": "secrets",
+            "secrets exposure": "secrets",
+            "open redirect": "redirect",
+            "debug mode": "debug",
+            "information disclosure": "info",
+            "sensitive data": "info",
+        }
+        
+        for pattern, normalized in vuln_keywords.items():
+            if pattern in title:
+                return normalized
+        
+        return title[:30]  # Fallback
+
+    def _print_final_summary(self, findings: list[Finding], chains: list):
+        """Print final SAST scan summary."""
+        from rich.table import Table
+        
+        # Summary box
+        console.print(f"\n╭─ Scan Results ─╮")
+        console.print(f"│ {len(findings)} findings    │")
+        console.print(f"│ {len(chains)} chains       │")
+        console.print(f"╰────────────────╯\n")
+        
+        if not findings:
+            return
+
+        # Findings table
+        table = Table(title="SAST Findings")
+        table.add_column("Sev", style="bold", width=10)
+        table.add_column("Finding")
+        table.add_column("File")
+        
+        severity_colors = {
+            "critical": "red bold",
+            "high": "red", 
+            "medium": "yellow",
+            "low": "blue",
+        }
+        
+        # Sort by severity rank
+        sorted_findings = sorted(
+            findings, 
+            key=lambda x: x.severity.rank, 
+            reverse=True
+        )
+        
+        for f in sorted_findings:
+            sev = str(f.severity.value).upper()
+            color = severity_colors.get(str(f.severity.value).lower(), "white")
+            filename = (f.file_path or "").split("/")[-1].split("\\")[-1] or "N/A"
+            table.add_row(f"[{color}]{sev}[/{color}]", f.title, filename)
+        
+        console.print(table)
 
     def _deduplicate_dast_findings(self, findings: list[Finding]) -> list[Finding]:
         """Deduplicate DAST findings based on endpoint and category."""

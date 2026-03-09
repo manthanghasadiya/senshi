@@ -2,16 +2,15 @@
 
 All notable changes to Senshi are documented here.
 
-## [0.5.2] - 2026-03-09
+## [0.5.3] - 2026-03-09
 
 ### Added
-- **Proactive Discovery**: Added a dedicated wordlist to the DAST crawler for discovering hidden sensitive endpoints like `/api/config` and `/redirect`.
-- **Open Redirect Module**: New module for detecting open redirect vulnerabilities via `Location` headers and response body analysis.
+- **Final Results Table**: Added a comprehensive results table display for SAST scans, mirroring the DAST output style.
 
 ### Improved
-- **Advanced Deduplication**: Implemented cross-scanner deduplication for SAST and DAST, featuring title normalization and severity-based ranking.
-- **Critical Detection**: Enhanced `InfoDisclosureModule` with comprehensive patterns for API keys (sk-), AWS keys, and private keys.
-- **Confidence Scoring**: Refined `CommandInjectionModule` to mark findings as `CONFIRMED` upon detecting definitive OS output or shell errors.
+- **Aggressive Deduplication**: Overhauled SAST deduplication to be more aggressive, focusing on core vulnerability types and file-based grouping to eliminate cross-scanner redundancy.
+
+## [0.5.2] - 2026-03-09
 
 ## [0.5.1] — 2026-03-09
 
