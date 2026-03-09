@@ -65,6 +65,19 @@ class Crawler:
         self._visited: set[str] = set()
         self._endpoints: list[DiscoveredEndpoint] = []
 
+    SENSITIVE_ENDPOINTS_TO_CHECK = [
+        "/redirect",
+        "/api/config",
+        "/config",
+        "/admin",
+        "/admin/users",
+        "/.env",
+        "/debug",
+        "/actuator",
+        "/actuator/health",
+        "/actuator/env",
+    ]
+
     def crawl(self, start_url: str | None = None) -> list[DiscoveredEndpoint]:
         """
         Crawl the target and discover endpoints.
@@ -80,7 +93,10 @@ class Crawler:
         # Phase 2: Crawl pages
         self._crawl_page(start, depth=0)
 
-        # Phase 3: Classify endpoints with LLM
+        # Phase 3: Check sensitive endpoints wordlist
+        self._check_sensitive_endpoints(start)
+
+        # Phase 4: Classify endpoints with LLM
         if self.brain and self._endpoints:
             self._classify_endpoints()
 
@@ -230,6 +246,32 @@ class Crawler:
         api_endpoints = self._extract_api_patterns(response.body, self.session.base_url)
         for ep in api_endpoints:
             self._add_endpoint(ep, "GET", source="js")
+
+    def _check_sensitive_endpoints(self, base_url: str) -> None:
+        """Check for common sensitive endpoints (wordlist-based)."""
+        logger.info("Checking for sensitive endpoints...")
+        for path in self.SENSITIVE_ENDPOINTS_TO_CHECK:
+            full_url = f"{base_url.rstrip('/')}{path}"
+            
+            try:
+                response = self.session.get(full_url, timeout=5)
+                # If it's not a 404 or 405, it might be interesting
+                if response.status_code not in [404, 405]:
+                    # Infer params from path
+                    params = []
+                    if "redirect" in path:
+                        params = ["url", "next", "return"]
+                    elif "config" in path:
+                        params = []
+                    
+                    self._add_endpoint(
+                        full_url,
+                        "GET",
+                        params=params,
+                        source="wordlist",
+                    )
+            except Exception:
+                pass
 
     def _check_robots(self, base_url: str) -> None:
         """Check robots.txt for disallowed paths (interesting targets)."""

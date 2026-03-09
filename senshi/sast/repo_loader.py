@@ -139,12 +139,21 @@ class RepoLoader:
                 except OSError:
                     continue
 
-                # Load file
+                # Load file with encoding fallbacks
                 try:
-                    content = filepath.read_text(encoding="utf-8", errors="ignore")
+                    # Try UTF-8 first
+                    try:
+                        content = filepath.read_text(encoding="utf-8")
+                    except UnicodeDecodeError:
+                        # Fallback to UTF-16 then Latin-1
+                        try:
+                            content = filepath.read_text(encoding="utf-16")
+                        except UnicodeDecodeError:
+                            content = filepath.read_text(encoding="latin-1", errors="ignore")
+                            
                     rel_path = str(filepath.relative_to(root))
                     files.append(LoadedFile(path=rel_path, content=content))
-                except (OSError, UnicodeDecodeError) as e:
+                except OSError as e:
                     logger.debug(f"Skipping {filepath}: {e}")
                     continue
 

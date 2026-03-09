@@ -189,26 +189,24 @@ class ScanEngine:
                         all_findings.extend(findings)
 
             # Phase 4: Deduplicate and sort
-            from senshi.ai.batch_analyzer import BatchAnalyzer
-            analyzer = BatchAnalyzer(self.brain)
-            unique_findings = analyzer._deduplicate_findings(all_findings)
+            unique_findings = self._deduplicate_dast_findings(all_findings)
             print_success(f"Analysis complete: found {len(unique_findings)} vulnerabilities")
             
             # Phase 5: Build chains
-            if len(unique_findings) >= 2: # Use unique_findings for chain building
+            if len(unique_findings) >= 2:
                 console.print("\n[bold cyan]Phase 5:[/bold cyan] Building exploit chains...")
                 chain_builder = ChainBuilder(self.brain)
-                chains = chain_builder.build_chains(all_findings, target_description=url)
+                chains = chain_builder.build_chains(unique_findings, target_description=url)
                 result.chains = chains
                 if chains:
                     print_success(f"Found {len(chains)} exploit chains")
 
-            result.findings = all_findings
+            result.findings = unique_findings
             result.completed_at = datetime.now().isoformat()
 
             # Finalize progressive save
             if self._scan_state:
-                self._scan_state.findings = all_findings
+                self._scan_state.findings = unique_findings
                 self._scan_state.llm_calls = self.brain.total_calls
                 self._scan_state.complete()
 
@@ -287,22 +285,117 @@ class ScanEngine:
             except Exception as e:
                 logger.warning(f"{scanner.get_scanner_name()} failed: {e}")
 
-        # Phase 5: Build chains
-        if len(all_findings) >= 2:
-            console.print("\n[bold cyan]Phase 5:[/bold cyan] Building exploit chains...")
+        # Phase 5: Deduplicate findings
+        unique_findings = self._deduplicate_sast_findings(all_findings)
+        result.findings = unique_findings
+        print_success(f"Analysis complete: found {len(unique_findings)} unique vulnerabilities")
+
+        # Phase 6: Build chains
+        if len(unique_findings) >= 2:
+            console.print("\n[bold cyan]Phase 6:[/bold cyan] Building exploit chains...")
             chain_builder = ChainBuilder(self.brain)
             chains = chain_builder.build_chains(
-                all_findings, target_description=source
+                unique_findings, target_description=source
             )
             result.chains = chains
             if chains:
                 print_success(f"Found {len(chains)} exploit chains")
 
-        result.findings = all_findings
         result.completed_at = datetime.now().isoformat()
-
-        self._print_summary(result)
         return result
+
+    def _deduplicate_sast_findings(self, findings: list[Finding]) -> list[Finding]:
+        """
+        Deduplicate findings from multiple SAST scanners.
+        
+        Key: (file_path, line_number, category, normalized_title)
+        Keep: Highest severity version
+        """
+        # Sort by severity (highest first) so we keep the most severe
+        sorted_findings = sorted(
+            findings,
+            key=lambda f: f.severity.rank,
+            reverse=True
+        )
+        
+        seen = set()
+        unique = []
+        
+        for f in sorted_findings:
+            # Normalize title for comparison
+            title_normalized = self._normalize_title(f.title)
+            
+            # Create dedup key
+            key = (
+                f.file_path,
+                f.line_number if f.line_number else 0,
+                f.category.lower() if f.category else "",
+                title_normalized,
+            )
+            
+            if key not in seen:
+                seen.add(key)
+                unique.append(f)
+        
+        return unique
+
+    def _deduplicate_dast_findings(self, findings: list[Finding]) -> list[Finding]:
+        """Deduplicate DAST findings based on endpoint and category."""
+        sorted_findings = sorted(
+            findings, 
+            key=lambda f: f.severity.rank, 
+            reverse=True
+        )
+        
+        seen = set()
+        unique = []
+        
+        for f in sorted_findings:
+            # Normalize endpoint (remove query params, trailing slash)
+            base_endpoint = f.endpoint.split("?")[0].rstrip("/").lower()
+            
+            # Key on endpoint + category
+            key = (base_endpoint, f.category.lower() if f.category else "")
+            
+            if key not in seen:
+                seen.add(key)
+                unique.append(f)
+        
+        return unique
+
+    def _normalize_title(self, title: str) -> str:
+        """Normalize title for deduplication."""
+        if not title:
+            return ""
+        
+        # Lowercase and remove common variations
+        normalized = title.lower().strip()
+        
+        # Remove leading "the", endpoint variations
+        normalized = normalized.replace("in /", " ").replace("in the ", " ")
+        normalized = normalized.replace("endpoint", "").replace("vulnerability", "")
+        normalized = normalized.replace("  ", " ").strip()
+        
+        # Extract core vuln type
+        vuln_types = [
+            "sql injection", "sqli",
+            "xss", "cross-site scripting", "reflected xss",
+            "ssrf", "server-side request forgery",
+            "command injection", "cmdi", "rce",
+            "idor", "insecure direct object",
+            "missing auth", "authentication",
+            "open redirect",
+            "hardcoded secret", "secrets exposure",
+            "debug mode",
+            "sensitive data", "information disclosure",
+        ]
+        
+        for vt in vuln_types:
+            if vt in normalized:
+                # Return just the vuln type + location hint
+                return vt
+        
+        return normalized
 
     def _handle_interrupt(self, signum: Any, frame: Any) -> None:
         """Handle Ctrl+C — save partial results and exit."""

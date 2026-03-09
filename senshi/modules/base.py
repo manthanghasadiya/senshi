@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
+from urllib.parse import urlparse
 
 from senshi.core.session import Session, Response
 from senshi.reporters.models import Finding, Severity, Confidence, ScanMode
@@ -249,5 +250,13 @@ class VulnModule(ABC):
             body = {name: payload}
         elif loc == "header":
             headers[name] = payload
+        elif loc == "path":
+            # Append payload to URL path for sensitive file discovery
+            parsed = urlparse(url)
+            path = parsed.path
+            if not path.endswith("/") and not payload.startswith("/"):
+                path += "/"
+            path += payload
+            url = parsed._replace(path=path).geturl()
             
         return url, body, headers

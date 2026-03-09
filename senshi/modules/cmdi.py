@@ -38,22 +38,50 @@ class CommandInjectionModule(VulnModule):
         payload = result.payload
         
         # 1. Output-based detection
-        cmdi_indicators = [
-            "root:x:0:0:",  # /etc/passwd
-            "Windows IP Configuration",  # ipconfig
-            "uid=", "gid=", "groups=",  # id
+        confirmed_patterns = [
+            r"root:x:0:0:",                   # /etc/passwd
+            r"Windows IP Configuration",       # ipconfig
+            r"uid=\d+",                        # Linux id
+            r"gid=\d+",                        # Linux id
+            r"[a-zA-Z0-9_-]+\\[a-zA-Z0-9_-]+", # Windows domain\user
+            r"COMPUTERNAME=",                  # Windows env
+            r"USERNAME=",                      # Windows env
+            r"bin/bash",                       # Shell path
+            r"Directory of ",                  # Windows dir
         ]
-        if any(ind in response_body for ind in cmdi_indicators):
+        
+        import re
+        for pattern in confirmed_patterns:
+            if re.search(pattern, response_body):
+                return Finding(
+                    title="Command Injection Confirmed",
+                    severity=Severity.CRITICAL,
+                    confidence=Confidence.CONFIRMED,
+                    category="cmdi",
+                    description="Successfully executed OS commands on the server.",
+                    endpoint=result.request["url"],
+                    payload=payload,
+                    evidence=f"Command output detected: {response_body[:100].strip()}",
+                    response_snippet=response_body[:500],
+                )
+
+        # Check for shell errors (also confirmed attempted execution)
+        error_patterns = [
+            "not recognized as an internal or external command",
+            "command not found",
+            "No such file or directory",
+            "Permission denied",
+        ]
+        if any(err in response_body for err in error_patterns):
             return Finding(
-                title="OS Command Injection",
+                title="Command Injection (Error-Based)",
                 severity=Severity.CRITICAL,
                 confidence=Confidence.CONFIRMED,
                 category="cmdi",
-                description="Successfully executed OS commands on the server.",
+                description="Server attempted to execute command but failed with shell error.",
                 endpoint=result.request["url"],
                 payload=payload,
-                evidence="Command output detected in response body",
-                response_snippet=response_body[:500],
+                evidence=f"Shell error detected: {response_body[:100].strip()}",
             )
             
         # 2. Blind Time-based detection
