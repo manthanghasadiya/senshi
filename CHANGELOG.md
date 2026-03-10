@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.7] — 2026-03-09
+### Added
+- **Smart Auto-Authentication**: Automatically detects login forms, extracts CSRF tokens, and performs login.
+- **Form Parser**: New `LoginFormParser` uses hints and types to identify username/password/hidden fields.
+- **Auth Manager**: Orchestrates login flows and handles session cookie extraction/persistence.
+- **CLI Options**: Added `--login-url`, `--username` (`-u`), and `--password` (`-p`) to `pentest`, `dast`, and `recon` commands.
+- **Session Recovery**: `PentestAgent` now attempts auto-relogin if the session dies mid-scan.
+
 ## [0.5.6] — 2026-03-09
 ### Added
 - **Session Auto-Validation**: Scanner now checks if the session is alive before starting and during the scan loop.

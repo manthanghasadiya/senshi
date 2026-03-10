@@ -64,6 +64,9 @@ def dast(
     depth: int = typer.Option(2, help="Crawl depth"),
     browser: bool = typer.Option(False, "--browser", help="Use headless browser for discovery"),
     endpoints: str = typer.Option("", help="Path to endpoints file (from 'senshi recon')"),
+    login_url: str = typer.Option("", help="Login page URL for auto-auth"),
+    username: str = typer.Option("", "-u", help="Username for auto-auth"),
+    password: str = typer.Option("", "-p", help="Password for auto-auth"),
 ) -> None:
     """Run a DAST scan against a live target."""
     from senshi.core.config import SenshiConfig
@@ -98,6 +101,13 @@ def dast(
     if cookie:
         from senshi.utils.http import parse_cookies
         config.cookies.update(parse_cookies(cookie))
+
+    if login_url:
+        config.login_url = login_url
+    if username:
+        config.username = username
+    if password:
+        config.password = password
 
     # Re-init after overrides
     config.__post_init__()
@@ -146,6 +156,9 @@ def pentest(
     har: str = typer.Option("", help="Export HTTP traffic to HAR file"),
     cookie: str = typer.Option(None, "--cookie", "-c", help="Session cookie (e.g., 'PHPSESSID=abc123; security=low')"),
     fast: bool = typer.Option(False, "--fast", help="Fast mode — fewer LLM calls, more aggressive batching"),
+    login_url: str = typer.Option("", help="Login page URL for auto-auth"),
+    username: str = typer.Option("", "-u", help="Username for auto-auth"),
+    password: str = typer.Option("", "-p", help="Password for auto-auth"),
 ) -> None:
     """Run autonomous pentest agent — Think → Act → Observe loop."""
     import asyncio
@@ -182,6 +195,13 @@ def pentest(
     if cookie:
         from senshi.utils.http import parse_cookies
         config.cookies.update(parse_cookies(cookie))
+
+    if login_url:
+        config.login_url = login_url
+    if username:
+        config.username = username
+    if password:
+        config.password = password
 
     config.__post_init__()
 
@@ -287,6 +307,9 @@ def recon(
     output: str = typer.Option("", help="Save endpoints to JSON"),
     verbose: bool = typer.Option(False, "--verbose"),
     browser: bool = typer.Option(False, "--browser", help="Use headless browser for recon"),
+    login_url: str = typer.Option("", help="Login page URL for auto-auth"),
+    username: str = typer.Option("", "-u", help="Username for auto-auth"),
+    password: str = typer.Option("", "-p", help="Password for auto-auth"),
 ) -> None:
     """Discover endpoints (recon only, no scanning)."""
     import json
@@ -311,6 +334,13 @@ def recon(
     if cookie:
         from senshi.utils.http import parse_cookies
         config.cookies.update(parse_cookies(cookie))
+        
+    if login_url:
+        config.login_url = login_url
+    if username:
+        config.username = username
+    if password:
+        config.password = password
         
     config.__post_init__()
 

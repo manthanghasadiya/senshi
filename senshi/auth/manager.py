@@ -1,151 +1,136 @@
 """
-AuthManager — multi-account authentication management.
+AuthManager — automated and manual authentication management.
 
-Handles cookie, bearer, and browser-based auth. Supports multi-account
-testing for IDOR (Account A accessing Account B's resources).
+Handles automated login via form parsing, cookie extraction,
+and session persistence.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import httpx
 from typing import Any
+from urllib.parse import urlparse
 
-from senshi.core.session import Session
+from senshi.auth.form_parser import LoginFormParser, LoginForm
 from senshi.utils.logger import get_logger
 
 logger = get_logger("senshi.auth.manager")
 
 
-@dataclass
-class AuthState:
-    """Authentication state for a single account."""
-
-    name: str
-    type: str  # "cookie", "bearer", "browser"
-    cookies: dict[str, str] = field(default_factory=dict)
-    token: str = ""
-    headers: dict[str, str] = field(default_factory=dict)
-    login_url: str = ""
-    credentials: dict[str, str] = field(default_factory=dict)
-
-    @property
-    def cookie_string(self) -> str:
-        return "; ".join(f"{k}={v}" for k, v in self.cookies.items())
-
-
 class AuthManager:
     """
-    Manage authentication for multiple accounts.
-
+    Manage authentication flows.
+    
     Supports:
-    - Cookie-based auth (parse raw Cookie header)
-    - Bearer token auth
-    - Browser-based auth (Playwright login flows)
-    - Account switching for IDOR testing
+    - Automated login form detection
+    - CSRF token extraction
+    - Session cookie persistence
+    - Re-authentication on session death
     """
-
-    def __init__(self) -> None:
-        self.accounts: dict[str, AuthState] = {}
-        self.active_account: str = "primary"
-
-    def add_cookie_auth(self, name: str, cookies: str) -> None:
-        """Add cookie-based authentication from raw Cookie header value."""
-        parsed: dict[str, str] = {}
-        for pair in cookies.split(";"):
-            pair = pair.strip()
-            if "=" in pair:
-                key, _, value = pair.partition("=")
-                parsed[key.strip()] = value.strip()
-
-        self.accounts[name] = AuthState(
-            name=name,
-            type="cookie",
-            cookies=parsed,
-            headers={"Cookie": cookies},
-        )
-        logger.debug(f"Added cookie auth: {name} ({len(parsed)} cookies)")
-
-    def add_bearer_auth(self, name: str, token: str) -> None:
-        """Add Bearer token authentication."""
-        self.accounts[name] = AuthState(
-            name=name,
-            type="bearer",
-            token=token,
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        logger.debug(f"Added bearer auth: {name}")
-
-    def add_raw_header_auth(self, name: str, header_str: str) -> None:
-        """Add auth from raw header string (e.g., 'Cookie: abc=123')."""
-        if ":" in header_str:
-            key, _, value = header_str.partition(":")
-            key, value = key.strip(), value.strip()
-
-            if key.lower() == "cookie":
-                self.add_cookie_auth(name, value)
-            elif key.lower() == "authorization":
-                if value.lower().startswith("bearer "):
-                    self.add_bearer_auth(name, value[7:])
-                else:
-                    self.accounts[name] = AuthState(
-                        name=name, type="bearer",
-                        headers={key: value},
-                    )
+    
+    def __init__(
+        self,
+        login_url: str,
+        username: str,
+        password: str,
+    ):
+        self.login_url = login_url
+        self.username = username
+        self.password = password
+        self.parser = LoginFormParser()
+        self.form: LoginForm | None = None
+        self.session_cookie: str | None = None
+    
+    async def login(self, client: httpx.AsyncClient | httpx.Client) -> str | None:
+        """Auto-detect form and login."""
+        logger.info(f"Attempting automated login at: {self.login_url}")
+        
+        try:
+            # Step 1: Fetch login page
+            if isinstance(client, httpx.AsyncClient):
+                resp = await client.get(self.login_url)
             else:
-                self.accounts[name] = AuthState(
-                    name=name, type="cookie",
-                    headers={key: value},
-                )
-
-    def add_browser_auth(self, name: str, login_url: str,
-                         username: str, password: str) -> None:
-        """Add browser-based auth (login via Playwright)."""
-        self.accounts[name] = AuthState(
-            name=name,
-            type="browser",
-            login_url=login_url,
-            credentials={"username": username, "password": password},
-        )
-
-    def get_headers(self, account: str | None = None) -> dict[str, str]:
-        """Get auth headers for a specific account."""
-        acc = self.accounts.get(account or self.active_account)
-        if not acc:
-            return {}
-        return dict(acc.headers)
-
-    def get_session(self, account: str | None = None,
-                    base_url: str = "", **kwargs: Any) -> Session:
-        """Get a configured Session for a specific account."""
-        headers = self.get_headers(account)
-        acc = self.accounts.get(account or self.active_account)
-
-        auth_str = ""
-        if acc:
-            if acc.type == "cookie":
-                auth_str = f"Cookie: {acc.cookie_string}"
-            elif acc.type == "bearer":
-                auth_str = f"Bearer {acc.token}"
-
-        return Session(
-            base_url=base_url,
-            auth=auth_str,
-            headers=headers,
-            **kwargs,
-        )
-
-    def switch_account(self, name: str) -> None:
-        """Switch the active account (for IDOR testing)."""
-        if name in self.accounts:
-            self.active_account = name
-            logger.debug(f"Switched to account: {name}")
-        else:
-            logger.warning(f"Account not found: {name}")
-
-    @property
-    def has_multi_account(self) -> bool:
-        """Check if we have multiple accounts for IDOR testing."""
-        return len(self.accounts) >= 2
-
-    def get_account_names(self) -> list[str]:
-        return list(self.accounts.keys())
+                resp = client.get(self.login_url)
+            
+            # Step 2: Parse form
+            self.form = self.parser.parse(resp.text, self.login_url)
+            
+            if not self.form:
+                logger.error(f"Could not find login form on {self.login_url}")
+                return None
+            
+            logger.info("Detected login form:")
+            logger.info(f"  Action: {self.form.action}")
+            logger.info(f"  Username field: {self.form.username_field}")
+            logger.info(f"  Password field: {self.form.password_field}")
+            if self.form.hidden_fields:
+                logger.info(f"  Hidden fields: {list(self.form.hidden_fields.keys())}")
+            
+            # Step 3: Build POST data
+            data = {}
+            if self.form.username_field:
+                data[self.form.username_field] = self.username
+            if self.form.password_field:
+                data[self.form.password_field] = self.password
+            
+            # Add hidden fields (CSRF, etc.)
+            data.update(self.form.hidden_fields)
+            
+            # Add submit button if present
+            if self.form.submit_field:
+                data[self.form.submit_field[0]] = self.form.submit_field[1]
+            
+            # Step 4: Submit login
+            logger.info(f"Performing {self.form.method} login...")
+            if self.form.method == "POST":
+                if isinstance(client, httpx.AsyncClient):
+                    resp = await client.post(self.form.action, data=data)
+                else:
+                    resp = client.post(self.form.action, data=data)
+            else:
+                if isinstance(client, httpx.AsyncClient):
+                    resp = await client.get(self.form.action, params=data)
+                else:
+                    resp = client.get(self.form.action, params=data)
+            
+            # Step 5: Extract session cookie
+            self.session_cookie = self._extract_session(resp)
+            if self.session_cookie:
+                logger.info("Login successful!")
+                return self.session_cookie
+            else:
+                logger.warning("Login completed but no session cookie found.")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Login failed: {e}")
+            return None
+    
+    def _extract_session(self, resp: Any) -> str | None:
+        """Extract session cookie from response."""
+        cookies = []
+        
+        # httpx response has a .cookies attribute (CookieJar)
+        for name, value in resp.cookies.items():
+            cookies.append(f"{name}={value}")
+        
+        # Common session cookie names to prioritize
+        session_names = ["phpsessid", "jsessionid", "sessionid", "session", "sid", "token", "auth"]
+        
+        found_cookies = []
+        for cookie in cookies:
+            name = cookie.split("=")[0].lower()
+            if any(s in name for s in session_names):
+                logger.info(f"Found potential session cookie: {cookie.split('=')[0]}")
+                found_cookies.append(cookie)
+        
+        if found_cookies:
+            # Join multiple if found (e.g. security=low; PHPSESSID=...)
+            return "; ".join(found_cookies)
+            
+        # Return all cookies if no specific session found but some exist
+        if cookies:
+            logger.debug(f"Using all found cookies: {'; '.join(cookies)}")
+            return "; ".join(cookies)
+        
+        return None

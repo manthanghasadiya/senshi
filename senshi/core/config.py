@@ -76,6 +76,11 @@ class SenshiConfig:
     auth: str = ""
     headers: dict[str, str] = field(default_factory=dict)
     cookies: dict[str, str] = field(default_factory=dict)
+    
+    # Auto-Auth
+    login_url: str = ""
+    username: str = ""
+    password: str = ""
 
     def __post_init__(self) -> None:
         """Auto-detect provider from env vars if not set."""
@@ -123,6 +128,8 @@ class SenshiConfig:
             "max_payloads": self.max_payloads,
             "timeout": self.timeout,
             "proxy": self.proxy,
+            "login_url": self.login_url,
+            "username": self.username,
         }
         CONFIG_FILE.write_text(json.dumps(data, indent=2))
 
@@ -160,4 +167,5 @@ class SenshiConfig:
             "rate_limit": self.rate_limit,
             "max_payloads": self.max_payloads,
             "timeout": self.timeout,
+            "login_url": self.login_url or "(none)",
         }

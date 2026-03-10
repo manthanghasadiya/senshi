@@ -142,6 +142,29 @@ class ScanEngine:
                 timeout=self.config.timeout,
             )
             
+            # Handle Auto-Auth if configured
+            if self.config.login_url and self.config.username:
+                from senshi.auth.manager import AuthManager
+                auth_manager = AuthManager(
+                    login_url=self.config.login_url,
+                    username=self.config.username,
+                    password=self.config.password
+                )
+                import asyncio
+                # We are in a sync method, but AuthManager.login is async.
+                # Since engine is often called from CLI (sync), let's use a small helper or run it sync.
+                # Actually ScanEngine.run_dast is sync, but we might need to run the login.
+                # Looking at cli.py, it's not and async function. 
+                # Let's make a sync wrapper or just use httpx sync client inside AuthManager if needed.
+                # My AuthManager.login handles both.
+                cookie = auth_manager.login(session._get_client())
+                if cookie:
+                    print_success("Auto-authentication successful!")
+                    # Session's persistent client now has the cookies in its jar, 
+                    # but we should also update the config/session state for visibility.
+                    from senshi.utils.http import parse_cookies
+                    session.cookies.update(parse_cookies(cookie))
+            
             # Validate session
             if not session.is_alive():
                 print_error("Session is invalid or expired. Check your --cookie / --auth.")
