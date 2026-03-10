@@ -141,6 +141,13 @@ class ScanEngine:
                 rate_limit=self.config.rate_limit,
                 timeout=self.config.timeout,
             )
+            
+            # Validate session
+            if not session.is_alive():
+                print_error("Session is invalid or expired. Check your --cookie / --auth.")
+                result.completed_at = datetime.now().isoformat()
+                return result
+
             # Phase 1: Discovery
             console.print(f"\n[bold cyan]Phase 1:[/bold cyan] Discovering endpoints for {url}...")
             from senshi.dast.crawler import Crawler

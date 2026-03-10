@@ -41,6 +41,14 @@ class Response:
             elapsed_ms=response.elapsed.total_seconds() * 1000 if response.elapsed else 0,
         )
 
+    @property
+    def is_logout_redirect(self) -> bool:
+        """Check if this response is a redirect to a login page."""
+        if self.status_code in (301, 302, 303, 307, 308):
+            location = self.headers.get("Location", "").lower()
+            return "login" in location or "signin" in location or "auth" in location
+        return False
+
 
 class Session:
     """
@@ -99,8 +107,49 @@ class Session:
         # Baseline cache
         self._baselines: dict[str, Response] = {}
 
+        # Persistent clients for cookie jar management
+        self._client: httpx.Client | None = None
+        self._async_client: httpx.AsyncClient | None = None
+
         # Stats
         self.request_count = 0
+
+    def _get_client(self) -> httpx.Client:
+        """Get or create persistent sync client."""
+        if self._client is None:
+            self._client = httpx.Client(**self._build_client_kwargs())
+        return self._client
+
+    async def _get_async_client(self) -> httpx.AsyncClient:
+        """Get or create persistent async client."""
+        if self._async_client is None:
+            self._async_client = httpx.AsyncClient(**self._build_client_kwargs())
+        return self._async_client
+
+    def is_alive(self) -> bool:
+        """
+        Check if the session is still valid.
+        Returns False if we get a redirect to a login page.
+        """
+        try:
+            # HEAD request to base URL to check session
+            response = self.request("GET", "/", allow_redirects=False, timeout=5)
+            if response.is_logout_redirect:
+                logger.warning(f"Session dead! Redirected to login: {response.headers.get('Location')}")
+                return False
+            return response.status_code < 400
+        except Exception as e:
+            logger.debug(f"Session health check failed: {e}")
+            return False
+
+    def close(self):
+        """Close persistent clients."""
+        if self._client:
+            self._client.close()
+            self._client = None
+        if self._async_client:
+            # Async close handled outside usually, but we provide this for completeness
+            pass
 
     def _build_client_kwargs(self, skip_auth: bool = False, allow_redirects: bool = True) -> dict[str, Any]:
         """Build kwargs for httpx client."""
@@ -172,17 +221,27 @@ class Session:
 
         # Debug logging for cookies/headers
         logger.debug(f"Request: {method} {url}")
-        if client_kwargs.get("headers"):
-            logger.debug(f"Headers: {client_kwargs['headers']}")
-        if client_kwargs.get("cookies"):
-            logger.debug(f"Cookies: {client_kwargs['cookies']}")
+        
+        client = self._get_client()
+        
+        # Merge one-off headers if provided
+        request_headers = client.headers.copy()
+        if headers:
+            request_headers.update(headers)
 
-        with httpx.Client(**client_kwargs) as client:
-            response = client.request(
-                method, url, params=params, data=data, json=json_data, content=content, **kwargs
-            )
-            self.request_count += 1
-            return Response.from_httpx(response)
+        response = client.request(
+            method, 
+            url, 
+            params=params, 
+            data=data, 
+            json=json_data, 
+            content=content,
+            headers=request_headers,
+            follow_redirects=allow_redirects,
+            **kwargs
+        )
+        self.request_count += 1
+        return Response.from_httpx(response)
 
     async def async_get(self, path: str, params: dict[str, str] | None = None, skip_auth: bool = False, allow_redirects: bool = True) -> Response:
         """Send GET request (async)."""
@@ -226,14 +285,24 @@ class Session:
         await self._rate_limiter.async_wait()
         url = self._resolve_url(path)
 
-        client_kwargs = self._build_client_kwargs(skip_auth=skip_auth, allow_redirects=allow_redirects)
+        client = await self._get_async_client()
+        
+        # Merge one-off headers
+        request_headers = client.headers.copy()
         if headers:
-            client_kwargs["headers"] = {**client_kwargs["headers"], **headers}
+            request_headers.update(headers)
 
-        async with httpx.AsyncClient(**client_kwargs) as client:
-            response = await client.request(method, url, params=params, data=data, json=json_data)
-            self.request_count += 1
-            return Response.from_httpx(response)
+        response = await client.request(
+            method, 
+            url, 
+            params=params, 
+            data=data, 
+            json=json_data,
+            headers=request_headers,
+            follow_redirects=allow_redirects
+        )
+        self.request_count += 1
+        return Response.from_httpx(response)
 
     def get_baseline(self, path: str) -> Response:
         """

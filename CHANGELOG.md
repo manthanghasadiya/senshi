@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.6] — 2026-03-09
+### Added
+- **Session Auto-Validation**: Scanner now checks if the session is alive before starting and during the scan loop.
+- **Logout Detection**: Automatically detects 302 redirects to login pages and stops/skips accordingly.
+- **Persistent HTTP Clients**: Uses persistent `httpx` clients to better manage the cookie jar and handle session updates from the server.
+
+### Fixed
+- **Session Death Cycle**: Prevented the scanner from infinitely testing redirected login pages after session expiration.
+
 ## [0.5.5] — 2026-03-09
 ### Fixed
 - **Cookie Persistence**: Fixed major bug where cookies were dropped during `pentest` and `recon` operations.

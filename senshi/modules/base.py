@@ -175,8 +175,21 @@ class VulnModule(ABC):
         payloads = self.get_payloads(endpoint, tech_stack)
         
         for point in injection_points:
+            # Periodic session check
+            if not self.session.is_alive():
+                from senshi.utils.logger import get_logger
+                get_logger("senshi.modules.base").warning(f"Session died during {self.name} test. Stopping module.")
+                return findings
+
             for payload, technique in payloads:
                 result = self._execute_test(endpoint, point, payload, technique)
+                
+                # Immediate death detection
+                if result.response.get("is_logout_redirect"):
+                    from senshi.utils.logger import get_logger
+                    get_logger("senshi.modules.base").warning(f"Session expired! Got logout redirect during {self.name} test.")
+                    return findings
+
                 finding = self.analyze_result(result)
                 if finding:
                     findings.append(finding)
@@ -252,6 +265,7 @@ class VulnModule(ABC):
                 "body": response.body,
                 "headers": response.headers,
                 "length": len(response.body),
+                "is_logout_redirect": response.is_logout_redirect,
             },
             baseline={
                 "status": baseline_response.status_code,
