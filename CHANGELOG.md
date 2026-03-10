@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.9] — 2026-03-09
+### Fixed
+- **Auto-Login Execution**: Fixed a sync/async mismatch that was silently preventing the auto-login from running in `ScanEngine`.
+- **Recon Auth**: Integrated auto-authentication into the `recon` command. Previously, `recon` would skip login and fail to discover protected endpoints.
+- **Dependency**: Added `nest_asyncio` to support synchronous execution of async authentication flows in CLI/Engine.
+- **Debug Visibility**: Added `DEBUG` log output (enabled with `--verbose`) to show parsed login credentials and auth status.
+
 ## [0.5.8] — 2026-03-09
 ### Fixed
 - **Auth Before Recon**: Moved auto-authentication to Phase 0, strictly before reconnaissance and tech detection. This ensures the crawler discovers authenticated endpoints.

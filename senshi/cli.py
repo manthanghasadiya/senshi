@@ -76,6 +76,9 @@ def dast(
     print_banner()
     setup_global_logging(verbose)
 
+    if verbose:
+        console.print(f"[dim]DEBUG: login_url={login_url}, username={username}, password={'***' if password else None}[/dim]")
+
     # Build config
     config = SenshiConfig.load()
     if provider:
@@ -170,6 +173,9 @@ def pentest(
 
     print_banner()
     setup_global_logging(verbose)
+
+    if verbose:
+        console.print(f"[dim]DEBUG: login_url={login_url}, username={username}, password={'***' if password else None}[/dim]")
 
     # Build config
     config = SenshiConfig.load()
@@ -324,6 +330,9 @@ def recon(
     print_banner()
     setup_global_logging(verbose)
 
+    if verbose:
+        console.print(f"[dim]DEBUG: login_url={login_url}, username={username}, password={'***' if password else None}[/dim]")
+
     config = SenshiConfig.load()
     if provider:
         config.provider = provider
@@ -353,6 +362,23 @@ def recon(
         rate_limit=config.rate_limit,
         timeout=config.timeout,
     )
+
+    # Auto-Auth for Recon
+    if config.login_url and config.username:
+        from senshi.auth.manager import AuthManager
+        auth_manager = AuthManager(
+            login_url=config.login_url,
+            username=config.username,
+            password=config.password
+        )
+        print_status(f"Authenticating at {config.login_url}...")
+        cookie = auth_manager.login_sync(session._get_client())
+        if cookie:
+            print_success("Auto-authentication successful!")
+            from senshi.utils.http import parse_cookies
+            session.update_cookies(parse_cookies(cookie))
+        else:
+            print_error("Auto-authentication failed!")
 
     # Tech detection
     tech = TechDetector(session)

@@ -131,6 +131,18 @@ class ScanEngine:
         signal.signal(signal.SIGINT, self._handle_interrupt)
 
         try:
+            # Initialize session
+            session = Session(
+                base_url=url,
+                auth=self.config.auth,
+                proxy=self.config.proxy,
+                headers=self.config.headers,
+                cookies=self.config.cookies,
+                rate_limit=self.config.rate_limit,
+                timeout=self.config.timeout,
+            )
+            session.config = self.config # For PentestAgent style access if needed
+
             # Handle Auto-Auth BEFORE tech detection and crawl
             if self.config.login_url and self.config.username:
                 from senshi.auth.manager import AuthManager
@@ -139,7 +151,8 @@ class ScanEngine:
                     username=self.config.username,
                     password=self.config.password
                 )
-                cookie = auth_manager.login(session._get_client())
+                print_status(f"Authenticating at {self.config.login_url}...")
+                cookie = auth_manager.login_sync(session._get_client())
                 if cookie:
                     print_success("Auto-authentication successful!")
                     from senshi.utils.http import parse_cookies

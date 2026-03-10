@@ -41,6 +41,25 @@ class AuthManager:
         self.form: LoginForm | None = None
         self.session_cookie: str | None = None
     
+    def login_sync(self, client: httpx.Client) -> str | None:
+        """Synchronous wrapper for login."""
+        import asyncio
+        try:
+            # Try to use current loop if exists, else run new
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # This is tricky if already running, but since engine.py is usually 
+                # called from sync CLI, we can often just run it.
+                # If we are in an async loop already (e.g. from agent), we should use await.
+                # But ScanEngine is sync.
+                import nest_asyncio
+                nest_asyncio.apply()
+                return loop.run_until_complete(self.login(client))
+            else:
+                return loop.run_until_complete(self.login(client))
+        except RuntimeError:
+            return asyncio.run(self.login(client))
+
     async def login(self, client: httpx.AsyncClient | httpx.Client) -> str | None:
         """Auto-detect form and login."""
         logger.info(f"Attempting automated login at: {self.login_url}")
