@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.6] — 2026-03-09
+### Debug
+- **Crawl Debugging**: Added verbose standard output logging to the crawler to track response body content and link extraction progress.
+- **Session Verification**: Verified that response bodies are correctly decoded as UTF-8 strings.
+
 ## [0.6.5] — 2026-03-09
 ### Fixed
 - **Crawler Extraction**: Switched from regex to `BeautifulSoup` for high-fidelity link, script, and form extraction.
