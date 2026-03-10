@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.3] — 2026-03-09
+### Fixed
+- **Crawler URL Resolution**: Switched to robust `urljoin` resolution to prevent path stacking (e.g., `/about.php/vulnerabilities/`).
+- **Crawler Filtering**: Added noise filtering for static assets (JS, CSS, images) and `logout` links to preserve sessions.
+
 ## [0.6.2] — 2026-03-09
 ### Fixed
 - **Cookie Capture**: Improved session cookie extraction by capturing cookies from the initial GET request to the login page.

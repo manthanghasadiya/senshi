@@ -78,6 +78,27 @@ class Crawler:
         "/actuator/env",
     ]
 
+    SKIP_EXTENSIONS = {
+        '.js', '.css', '.png', '.jpg', '.jpeg', '.gif', '.ico', 
+        '.svg', '.woff', '.woff2', '.ttf', '.pdf', '.zip'
+    }
+
+    def _is_scannable(self, url: str) -> bool:
+        """Check if URL is worth scanning (not static assets or logout)."""
+        parsed = urlparse(url)
+        path = parsed.path.lower()
+        
+        # Skip static assets
+        for ext in self.SKIP_EXTENSIONS:
+            if path.endswith(ext):
+                return False
+        
+        # Skip logout to avoid killing session
+        if 'logout' in path:
+            return False
+            
+        return True
+
     def crawl(self, start_url: str | None = None) -> list[DiscoveredEndpoint]:
         """
         Crawl the target and discover endpoints.
@@ -148,24 +169,17 @@ class Crawler:
             self._add_endpoint(ep, "GET", source="api_pattern")
 
     def _normalize_url(self, href: str, base_url: str) -> str | None:
-        """Normalize URL preserving base path and enforcing scope."""
+        """Normalize URL using urljoin and enforce scope/scannability."""
         if not href:
             return None
             
-        # Ensure base_url ends with / to preserve directory context in urljoin
-        if not base_url.endswith("/"):
-            # If it doesn't end in /, urljoin will strip the last component 
-            # unless we append it.
-            base_dir = base_url + "/"
-        else:
-            base_dir = base_url
-
-        # urljoin handles relative URLs correctly preserving base path
-        full_url = urljoin(base_dir, href)
+        # urljoin handles all cases correctly:
+        # - Absolute URLs: returned as-is
+        # - Path relative: resolves against base page
+        # - Root relative: resolves against base domain
+        full_url = urljoin(base_url, href)
         
-        # Ensure we stay within the target scope
         try:
-            # Scope check against the session's base URL (the initial target)
             target_parsed = urlparse(self.session.base_url)
             url_parsed = urlparse(full_url)
             
@@ -173,8 +187,9 @@ class Crawler:
             if url_parsed.netloc != target_parsed.netloc:
                 return None
             
-            # For DVWA-like cases, we might also want to ensure it's within the path
-            # but for now host-only is safer for multi-segmented apps.
+            # Filter out non-scannable stuff
+            if not self._is_scannable(full_url):
+                return None
                 
             return full_url
         except Exception:
