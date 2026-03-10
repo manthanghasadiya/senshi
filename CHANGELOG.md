@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.5] — 2026-03-09
+### Fixed
+- **Cookie Persistence**: Fixed major bug where cookies were dropped during `pentest` and `recon` operations.
+- **Improved Logging**: Added debug logging for outgoing headers and cookies in verbose mode.
+
 ## [0.5.4] — 2026-03-09
 ### Added
 - `--cookie` / `-c` flag for session-based testing (e.g., DVWA, internal portals).

@@ -170,6 +170,13 @@ class Session:
         if headers:
             client_kwargs["headers"] = {**client_kwargs["headers"], **headers}
 
+        # Debug logging for cookies/headers
+        logger.debug(f"Request: {method} {url}")
+        if client_kwargs.get("headers"):
+            logger.debug(f"Headers: {client_kwargs['headers']}")
+        if client_kwargs.get("cookies"):
+            logger.debug(f"Cookies: {client_kwargs['cookies']}")
+
         with httpx.Client(**client_kwargs) as client:
             response = client.request(
                 method, url, params=params, data=data, json=json_data, content=content, **kwargs

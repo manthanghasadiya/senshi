@@ -192,6 +192,7 @@ def pentest(
             auth=config.auth,
             proxy=config.proxy,
             headers=config.headers,
+            cookies=config.cookies,
             rate_limit=config.rate_limit,
             timeout=config.timeout,
         )
@@ -281,6 +282,7 @@ def recon(
     url: str = typer.Argument(..., help="Target URL for recon"),
     provider: str = typer.Option("", help="LLM provider"),
     auth: str = typer.Option("", help="Auth header"),
+    cookie: str = typer.Option(None, "--cookie", "-c", help="Session cookie (e.g., 'PHPSESSID=abc123; security=low')"),
     depth: int = typer.Option(3, help="Crawl depth"),
     output: str = typer.Option("", help="Save endpoints to JSON"),
     verbose: bool = typer.Option(False, "--verbose"),
@@ -304,9 +306,23 @@ def recon(
         config.provider = provider
     if auth:
         config.auth = auth
+    
+    # Parse cookies
+    if cookie:
+        from senshi.utils.http import parse_cookies
+        config.cookies.update(parse_cookies(cookie))
+        
     config.__post_init__()
 
-    session = Session(base_url=url, auth=auth)
+    session = Session(
+        base_url=url,
+        auth=config.auth,
+        proxy=config.proxy,
+        headers=config.headers,
+        cookies=config.cookies,
+        rate_limit=config.rate_limit,
+        timeout=config.timeout,
+    )
 
     # Tech detection
     tech = TechDetector(session)
