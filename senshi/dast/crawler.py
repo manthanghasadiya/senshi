@@ -140,34 +140,22 @@ class Crawler:
         
         try:
             response = self.session.get(url)
-            print(f"[CRAWL DEBUG] Fetched {url}")
-            print(f"[CRAWL DEBUG] Status: {response.status_code}")
-            print(f"[CRAWL DEBUG] Body length: {len(response.body)} chars")
-            print(f"[CRAWL DEBUG] Body preview: {response.body[:500].replace('\n', ' ')}")
+            logger.debug(f"Fetched {url} - Status: {response.status_code}, Length: {len(response.body)}")
             
             if response.is_logout_redirect:
-                print(f"[CRAWL DEBUG] WARNING: Redirected to login! Session might be dead.")
+                logger.warning(f"Redirected to login! Session might be dead: {url}")
         except Exception as e:
-            print(f"[CRAWL DEBUG] Failed to fetch {url}: {e}")
+            logger.debug(f"Failed to fetch {url}: {e}")
             return
 
         # Add the page itself as an endpoint
         self._add_endpoint(url, "GET", source="crawl")
 
         body = response.body
-        
-        if 'href=' in body.lower():
-            print(f"[CRAWL DEBUG] Body contains 'href=' - good!")
-        else:
-            print(f"[CRAWL DEBUG] WARNING: No 'href=' found in body!")
 
         # Extract links from HTML
-        print(f"[CRAWL DEBUG] Calling _extract_links...")
         links = self._extract_links(body, url)
-        print(f"[CRAWL DEBUG] _extract_links returned {len(links)} links")
-        
         for link in links:
-            print(f"[CRAWL DEBUG]   -> {link}")
             self._crawl_page(link, depth + 1)
 
         # Extract endpoints from JavaScript

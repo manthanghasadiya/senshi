@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.8] — 2026-03-10
+### Added
+- **Final Release Cleanup**: Removed internal debug prints and optimized workspace for production.
+- **Improved Scoping**: finalized subdirectory scoping logic for enterprise web apps.
+
 ## [0.6.7] — 2026-03-10
 ### Fixed
 - **urljoin Normalization**: Fixed a critical crawler bug where relative links were resolved incorrectly because the base URL lacked a trailing slash.
