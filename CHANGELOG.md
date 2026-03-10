@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.2] — 2026-03-09
+### Fixed
+- **Cookie Capture**: Improved session cookie extraction by capturing cookies from the initial GET request to the login page.
+- **DVWA Compatibility**: Added automatic `security=low` cookie for better out-of-the-box support for DVWA.
+- **Auth Manager**: Simplified `login_sync` and `login` methods to use `httpx` cookie jar for automatic session maintenance.
+
 ## [0.6.1] — 2026-03-09
 ### Fixed
 - **Missing Dependencies**: Fixed `ModuleNotFoundError: No module named 'bs4'` by ensuring `beautifulsoup4` and `nest_asyncio` are correctly handled.
