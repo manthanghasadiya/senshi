@@ -151,6 +151,18 @@ class VulnModule(ABC):
             # Fallback: return first N payloads
             return payloads[:max_payloads]
     
+    def _sanitize_method(self, method: str) -> str:
+        """Ensure valid HTTP method."""
+        if not method:
+            return "GET"
+        method = str(method).upper().strip()
+        if "/" in method:
+            method = method.split("/")[0]
+        valid_methods = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
+        if method not in valid_methods:
+            return "GET"
+        return method
+
     # ── Testing Methods ───────────────────────────────────────────
     
     def test(self, endpoint: dict, tech_stack: dict) -> list[Finding]:
@@ -191,15 +203,34 @@ class VulnModule(ABC):
             endpoint, injection_point, payload
         )
         
+        method = self._sanitize_method(method)
+        
         # Send request
         start_time = time.time()
-        response = self.session.request(
-            method=method,
-            path=injected_url,
-            data=injected_body,
-            headers=injected_headers,
-            allow_redirects=(technique != "open_redirect"),
-        )
+        try:
+            response = self.session.request(
+                method=method,
+                path=injected_url,
+                data=injected_body,
+                headers=injected_headers,
+                allow_redirects=(technique != "open_redirect"),
+                timeout=10,
+            )
+        except Exception as e:
+            # Return a dummy failure result instead of crashing
+            from senshi.core.session import Response
+            from senshi.utils.logger import get_logger
+            logger = get_logger("senshi.modules.base")
+            logger.warning(f"Request failed for {method} {injected_url}: {e}")
+            return TestResult(
+                payload=payload,
+                technique=technique,
+                request={"url": injected_url, "method": method, "injection_point": injection_point},
+                response={"status": 0, "body": "", "headers": {}, "length": 0},
+                baseline={"status": 0, "body": "", "length": 0},
+                elapsed_time=0.0,
+            )
+            
         elapsed = time.time() - start_time
         
         # Check for OOB callback if applicable

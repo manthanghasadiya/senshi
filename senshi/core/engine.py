@@ -112,6 +112,7 @@ class ScanEngine:
         v0.2.0: Smart routing, batch analysis, progressive save.
         """
         start_time = time.time()
+        self._last_run_url = url
 
         result = ScanResult(
             target=url,
@@ -180,6 +181,11 @@ class ScanEngine:
                     "params": ep.params if hasattr(ep, "params") else ep.get("params", []),
                     "content_type": ep.content_type if hasattr(ep, "content_type") else ep.get("content_type", "text/html"),
                 }
+                
+                # Strict scope filtering
+                if not self._is_in_scope(ep_dict["url"]):
+                    logger.debug(f"Skipping out-of-scope URL: {ep_dict['url']}")
+                    continue
                 
                 for module in active_modules:
                     applicability = module.is_applicable(ep_dict, tech_info)
@@ -340,6 +346,17 @@ class ScanEngine:
                 unique.append(f)
         
         return unique
+
+    def _is_in_scope(self, url: str) -> bool:
+        """Check if URL is within scan scope (same host)."""
+        if not url:
+            return False
+        try:
+            url_host = urlparse(url).netloc
+            target_host = urlparse(getattr(self, "_last_run_url", "")).netloc
+            return url_host == target_host
+        except Exception:
+            return False
 
     def _normalize_for_dedup(self, finding: Finding) -> str:
         """Create normalized key for deduplication."""

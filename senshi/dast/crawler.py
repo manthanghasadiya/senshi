@@ -125,10 +125,7 @@ class Crawler:
         # Extract links from HTML
         links = self._extract_links(body, url)
         for link in links:
-            link_parsed = urlparse(link)
-            # Only follow same-domain links
-            if link_parsed.netloc == parsed.netloc or not link_parsed.netloc:
-                self._crawl_page(link, depth + 1)
+            self._crawl_page(link, depth + 1)
 
         # Extract endpoints from JavaScript
         js_urls = self._extract_js_urls(body, url)
@@ -150,6 +147,27 @@ class Crawler:
         for ep in api_endpoints:
             self._add_endpoint(ep, "GET", source="api_pattern")
 
+    def _normalize_url(self, href: str, base_url: str) -> str | None:
+        """Normalize URL preserving base path and enforcing scope."""
+        if not href:
+            return None
+            
+        # urljoin handles relative URLs correctly preserving base path
+        full_url = urljoin(base_url, href)
+        
+        # Ensure we stay within the target scope
+        try:
+            base_parsed = urlparse(self.session.base_url)
+            url_parsed = urlparse(full_url)
+            
+            # Only accept URLs on same host
+            if url_parsed.netloc != base_parsed.netloc:
+                return None
+                
+            return full_url
+        except Exception:
+            return None
+
     def _extract_links(self, html: str, base_url: str) -> list[str]:
         """Extract all href links from HTML."""
         links: list[str] = []
@@ -158,16 +176,19 @@ class Crawler:
             href = match.group(1)
             if href.startswith(("#", "javascript:", "mailto:", "tel:")):
                 continue
-            full_url = urljoin(base_url, href)
-            links.append(full_url)
+            
+            normalized = self._normalize_url(href, base_url)
+            if normalized:
+                links.append(normalized)
         return list(set(links))
 
     def _extract_js_urls(self, html: str, base_url: str) -> list[str]:
         """Extract JavaScript file URLs from HTML."""
         js_urls: list[str] = []
         for match in re.finditer(r'src=["\']([^"\']*\.js[^"\']*)["\']', html):
-            js_url = urljoin(base_url, match.group(1))
-            js_urls.append(js_url)
+            normalized = self._normalize_url(match.group(1), base_url)
+            if normalized:
+                js_urls.append(normalized)
         return js_urls
 
     def _extract_forms(self, html: str, base_url: str) -> list[dict[str, Any]]:
@@ -181,7 +202,10 @@ class Crawler:
         )
 
         for match in form_pattern.finditer(html):
-            action = urljoin(base_url, match.group(1))
+            normalized = self._normalize_url(match.group(1), base_url)
+            if not normalized:
+                continue
+                
             method = (match.group(2) or "GET").upper()
             form_body = match.group(3)
 
@@ -190,7 +214,7 @@ class Crawler:
                 r'<input[^>]*name=["\']([^"\']+)["\']', form_body, re.IGNORECASE
             )
 
-            forms.append({"action": action, "method": method, "params": params})
+            forms.append({"action": normalized, "method": method, "params": params})
 
         return forms
 
@@ -208,8 +232,9 @@ class Crawler:
 
         for pattern in api_patterns:
             for match in re.finditer(pattern, body):
-                full_url = urljoin(base_url, match.group(1))
-                endpoints.append(full_url)
+                normalized = self._normalize_url(match.group(1), base_url)
+                if normalized:
+                    endpoints.append(normalized)
 
         return list(set(endpoints))
 

@@ -28,11 +28,18 @@ class AuthBypassModule(VulnModule):
     def test(self, endpoint: dict, tech_stack: dict) -> list[Finding]:
         """Custom logic for testing missing auth."""
         # 1. Test without auth
-        response = self.session.request(
-            method=endpoint.get("method", "GET"),
-            path=endpoint["url"],
-            skip_auth=True
-        )
+        try:
+            response = self.session.request(
+                method=endpoint.get("method", "GET"),
+                path=endpoint["url"],
+                skip_auth=True,
+                timeout=10,
+            )
+        except Exception as e:
+            from senshi.utils.logger import get_logger
+            logger = get_logger("senshi.modules.auth")
+            logger.warning(f"Auth bypass test failed for {endpoint['url']}: {e}")
+            return []
         
         if response.status_code == 200:
             # Sensitive path accessible without auth?
