@@ -10,6 +10,7 @@ import re
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
+from bs4 import BeautifulSoup
 from senshi.ai.brain import Brain
 from senshi.ai.prompts.recon import JS_ANALYSIS_PROMPT, ENDPOINT_CLASSIFICATION_PROMPT
 from senshi.core.session import Response, Session
@@ -136,10 +137,10 @@ class Crawler:
             return
 
         self._visited.add(url)
-        parsed = urlparse(url)
-
+        
         try:
             response = self.session.get(url)
+            logger.debug(f"Fetched {url} - Status: {response.status_code}, Length: {len(response.body)}")
         except Exception as e:
             logger.debug(f"Failed to fetch {url}: {e}")
             return
@@ -179,15 +180,19 @@ class Crawler:
         if not href or href.startswith(('javascript:', 'mailto:', 'tel:', '#')):
             return None
             
-        # Handle root-relative URLs (e.g., /vulnerabilities/)
+        # 1. Handle root-relative URLs (e.g., /vulnerabilities/)
         if href.startswith('/') and not href.startswith('//'):
             # Detect if we need to prepend the application base path
             if self.app_base and not href.startswith(self.app_base + '/'):
                 if href != self.app_base:  # Don't double up if it's exactly the base
                     href = self.app_base + href
             full_url = self.domain + href
+        elif href.startswith('http'):
+            # 2. Absolute URL
+            full_url = href
         else:
-            # For relative paths, use urljoin (handles them vs directories/files correctly)
+            # 3. Relative path (e.g. vulnerabilities/sqli/) - resolves against base page
+            # Correctly handle if base_url is a file like about.php
             full_url = urljoin(base_url, href)
         
         try:
@@ -210,52 +215,60 @@ class Crawler:
             return None
 
     def _extract_links(self, html: str, base_url: str) -> list[str]:
-        """Extract all href links from HTML."""
+        """Extract all links from HTML using BeautifulSoup."""
+        soup = BeautifulSoup(html, 'html.parser')
         links: list[str] = []
-        # Match href attributes
-        for match in re.finditer(r'href=["\']([^"\']+)["\']', html):
-            href = match.group(1)
-            if href.startswith(("#", "javascript:", "mailto:", "tel:")):
-                continue
-            
+        
+        anchors = soup.find_all('a', href=True)
+        logger.debug(f"Found {len(anchors)} <a> tags on {base_url}")
+        
+        for tag in anchors:
+            href = tag.get('href')
             normalized = self._normalize_url(href, base_url)
+            
             if normalized:
                 links.append(normalized)
+                logger.debug(f"  ✓ {href} -> {normalized}")
+            else:
+                logger.debug(f"  ✗ {href} (Invalid or Out of Scope)")
+                
         return list(set(links))
 
     def _extract_js_urls(self, html: str, base_url: str) -> list[str]:
-        """Extract JavaScript file URLs from HTML."""
+        """Extract JavaScript file URLs using BeautifulSoup."""
+        soup = BeautifulSoup(html, 'html.parser')
         js_urls: list[str] = []
-        for match in re.finditer(r'src=["\']([^"\']*\.js[^"\']*)["\']', html):
-            normalized = self._normalize_url(match.group(1), base_url)
-            if normalized:
-                js_urls.append(normalized)
-        return js_urls
+        
+        scripts = soup.find_all('script', src=True)
+        for tag in scripts:
+            src = tag.get('src')
+            if '.js' in src.lower():
+                normalized = self._normalize_url(src, base_url)
+                if normalized:
+                    js_urls.append(normalized)
+        return list(set(js_urls))
 
     def _extract_forms(self, html: str, base_url: str) -> list[dict[str, Any]]:
-        """Extract form actions and parameters."""
+        """Extract form actions and parameters using BeautifulSoup."""
+        soup = BeautifulSoup(html, 'html.parser')
         forms: list[dict[str, Any]] = []
 
-        # Simple form extraction
-        form_pattern = re.compile(
-            r'<form[^>]*action=["\']([^"\']*)["\'][^>]*(?:method=["\'](\w+)["\'])?[^>]*>(.*?)</form>',
-            re.DOTALL | re.IGNORECASE,
-        )
-
-        for match in form_pattern.finditer(html):
-            normalized = self._normalize_url(match.group(1), base_url)
+        for form_tag in soup.find_all('form'):
+            action = form_tag.get('action', '')
+            method = form_tag.get('method', 'GET').upper()
+            
+            normalized = self._normalize_url(action, base_url)
             if not normalized:
                 continue
                 
-            method = (match.group(2) or "GET").upper()
-            form_body = match.group(3)
-
             # Extract input names
-            params = re.findall(
-                r'<input[^>]*name=["\']([^"\']+)["\']', form_body, re.IGNORECASE
-            )
+            params = []
+            for input_tag in form_tag.find_all(['input', 'textarea', 'select']):
+                name = input_tag.get('name')
+                if name:
+                    params.append(name)
 
-            forms.append({"action": normalized, "method": method, "params": params})
+            forms.append({"action": normalized, "method": method, "params": list(set(params))})
 
         return forms
 

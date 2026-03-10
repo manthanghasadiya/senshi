@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.5] — 2026-03-09
+### Fixed
+- **Crawler Extraction**: Switched from regex to `BeautifulSoup` for high-fidelity link, script, and form extraction.
+- **Enhanced Debugging**: Added granular logging to the crawling process to track URL discovery and scoping decisions.
+- **Path Resolution**: Improved relative URL resolution to better handle subdirectory-hosted applications.
+
 ## [0.6.4] — 2026-03-09
 ### Fixed
 - **Crawler Base Path Preservation**: Fixed a bug where the crawler would strip application base paths (like `/DVWA/`) from root-relative URLs, resulting in 404 errors.
