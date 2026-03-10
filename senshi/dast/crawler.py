@@ -152,17 +152,29 @@ class Crawler:
         if not href:
             return None
             
+        # Ensure base_url ends with / to preserve directory context in urljoin
+        if not base_url.endswith("/"):
+            # If it doesn't end in /, urljoin will strip the last component 
+            # unless we append it.
+            base_dir = base_url + "/"
+        else:
+            base_dir = base_url
+
         # urljoin handles relative URLs correctly preserving base path
-        full_url = urljoin(base_url, href)
+        full_url = urljoin(base_dir, href)
         
         # Ensure we stay within the target scope
         try:
-            base_parsed = urlparse(self.session.base_url)
+            # Scope check against the session's base URL (the initial target)
+            target_parsed = urlparse(self.session.base_url)
             url_parsed = urlparse(full_url)
             
             # Only accept URLs on same host
-            if url_parsed.netloc != base_parsed.netloc:
+            if url_parsed.netloc != target_parsed.netloc:
                 return None
+            
+            # For DVWA-like cases, we might also want to ensure it's within the path
+            # but for now host-only is safer for multi-segmented apps.
                 
             return full_url
         except Exception:

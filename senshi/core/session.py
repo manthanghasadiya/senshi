@@ -71,7 +71,6 @@ class Session:
             burst=3,
         )
 
-        # Build default headers
         self._default_headers: dict[str, str] = {
             "User-Agent": get_random_user_agent(),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -80,7 +79,9 @@ class Session:
         if headers:
             self._default_headers.update(headers)
 
-        self._default_cookies: dict[str, str] = cookies or {}
+        self._default_cookies: dict[str, str] = {}
+        if cookies:
+            self._default_cookies.update(cookies)
         
         # Auth info
         self._auth_headers: dict[str, str] = {}

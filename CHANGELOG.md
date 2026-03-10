@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.4] — 2026-03-09
+### Added
+- `--cookie` / `-c` flag for session-based testing (e.g., DVWA, internal portals).
+- Consistent `--header` / `-H` support across `pentest`, `dast`, and `recon`.
+
+### Fixed
+- **Crawler Pathing**: Preserves base path context (e.g., scanning `/DVWA/` correctly hits subdirectories).
+- **Session Support**: Ensured cookies and custom headers correctly propagate to all scan requests.
+
 All notable changes to Senshi are documented here.
 
 ## [0.5.3] - 2026-03-09

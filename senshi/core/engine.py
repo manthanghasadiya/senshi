@@ -136,6 +136,10 @@ class ScanEngine:
                 base_url=url,
                 auth=self.config.auth,
                 proxy=self.config.proxy,
+                headers=self.config.headers,
+                cookies=self.config.cookies,
+                rate_limit=self.config.rate_limit,
+                timeout=self.config.timeout,
             )
             # Phase 1: Discovery
             console.print(f"\n[bold cyan]Phase 1:[/bold cyan] Discovering endpoints for {url}...")
