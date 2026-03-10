@@ -19,7 +19,7 @@ import typer
 from rich.table import Table
 
 from senshi import __version__
-from senshi.utils.logger import console, print_banner, print_success, print_error
+from senshi.utils.logger import console, print_banner, print_success, print_error, print_status
 
 app = typer.Typer(
     name="senshi",
@@ -76,11 +76,41 @@ def dast(
     print_banner()
     setup_global_logging(verbose)
 
+    # ============================================
+    # PHASE 0: AUTHENTICATION (MUST BE FIRST!)
+    # ============================================
     if verbose:
-        console.print(f"[dim]DEBUG: login_url={login_url}, username={username}, password={'***' if password else None}[/dim]")
-
-    # Build config
+        console.print(f"[dim]DEBUG: login_url={login_url}, u={username}, p={'*'*len(password) if password else None}[/dim]")
+    
     config = SenshiConfig.load()
+
+    if login_url and username and password:
+        console.print("\n[bold cyan]Phase 0: Authentication[/bold cyan]")
+        console.print(f"  Logging into {login_url}...")
+        
+        from senshi.auth.manager import AuthManager
+        import httpx
+        
+        auth_manager = AuthManager(login_url, username, password)
+        
+        with httpx.Client(follow_redirects=True, timeout=30) as client:
+            session_cookie = auth_manager.login_sync(client)
+        
+        if session_cookie:
+            console.print(f"  [green]✓ Login successful![/green]")
+            if verbose:
+                console.print(f"  [dim]Session: {session_cookie[:50]}...[/dim]")
+            
+            # Update config cookies
+            from senshi.utils.http import parse_cookies
+            config.cookies.update(parse_cookies(session_cookie))
+        else:
+            console.print(f"  [red]✗ Login FAILED - check credentials[/red]")
+            raise typer.Exit(1)
+    elif login_url or username or password:
+        console.print("[yellow]! Warning: Missing some login credentials (need url, user, AND pass)[/yellow]")
+
+    # Build config overrides
     if provider:
         config.provider = provider
     if model:
@@ -100,17 +130,10 @@ def dast(
             key, _, value = h.partition(":")
             config.headers[key.strip()] = value.strip()
             
-    # Parse cookies
+    # Parse cookies override
     if cookie:
         from senshi.utils.http import parse_cookies
         config.cookies.update(parse_cookies(cookie))
-
-    if login_url:
-        config.login_url = login_url
-    if username:
-        config.username = username
-    if password:
-        config.password = password
 
     # Re-init after overrides
     config.__post_init__()
@@ -174,11 +197,41 @@ def pentest(
     print_banner()
     setup_global_logging(verbose)
 
+    # ============================================
+    # PHASE 0: AUTHENTICATION (MUST BE FIRST!)
+    # ============================================
     if verbose:
-        console.print(f"[dim]DEBUG: login_url={login_url}, username={username}, password={'***' if password else None}[/dim]")
-
-    # Build config
+        console.print(f"[dim]DEBUG: login_url={login_url}, u={username}, p={'*'*len(password) if password else None}[/dim]")
+    
     config = SenshiConfig.load()
+
+    if login_url and username and password:
+        console.print("\n[bold cyan]Phase 0: Authentication[/bold cyan]")
+        console.print(f"  Logging into {login_url}...")
+        
+        from senshi.auth.manager import AuthManager
+        import httpx
+        
+        auth_manager = AuthManager(login_url, username, password)
+        
+        with httpx.Client(follow_redirects=True, timeout=30) as client:
+            session_cookie = auth_manager.login_sync(client)
+        
+        if session_cookie:
+            console.print(f"  [green]✓ Login successful![/green]")
+            if verbose:
+                console.print(f"  [dim]Session: {session_cookie[:50]}...[/dim]")
+            
+            # Update config cookies
+            from senshi.utils.http import parse_cookies
+            config.cookies.update(parse_cookies(session_cookie))
+        else:
+            console.print(f"  [red]✗ Login FAILED - check credentials[/red]")
+            raise typer.Exit(1)
+    elif login_url or username or password:
+        console.print("[yellow]! Warning: Missing some login credentials (need url, user, AND pass)[/yellow]")
+
+    # Build config overrides
     if provider:
         config.provider = provider
     if model:
@@ -197,17 +250,10 @@ def pentest(
             key, _, value = h.partition(":")
             config.headers[key.strip()] = value.strip()
 
-    # Parse cookies
+    # Parse cookies override
     if cookie:
         from senshi.utils.http import parse_cookies
         config.cookies.update(parse_cookies(cookie))
-
-    if login_url:
-        config.login_url = login_url
-    if username:
-        config.username = username
-    if password:
-        config.password = password
 
     config.__post_init__()
 
@@ -330,26 +376,51 @@ def recon(
     print_banner()
     setup_global_logging(verbose)
 
+    # ============================================
+    # PHASE 0: AUTHENTICATION (MUST BE FIRST!)
+    # ============================================
     if verbose:
-        console.print(f"[dim]DEBUG: login_url={login_url}, username={username}, password={'***' if password else None}[/dim]")
-
+        console.print(f"[dim]DEBUG: login_url={login_url}, u={username}, p={'*'*len(password) if password else None}[/dim]")
+    
+    session_cookie = None
+    
     config = SenshiConfig.load()
+
+    if login_url and username and password:
+        console.print("\n[bold cyan]Phase 0: Authentication[/bold cyan]")
+        console.print(f"  Logging into {login_url}...")
+        
+        from senshi.auth.manager import AuthManager
+        import httpx
+        
+        auth_manager = AuthManager(login_url, username, password)
+        
+        with httpx.Client(follow_redirects=True, timeout=30) as client:
+            session_cookie = auth_manager.login_sync(client)
+        
+        if session_cookie:
+            console.print(f"  [green]✓ Login successful![/green]")
+            if verbose:
+                console.print(f"  [dim]Session: {session_cookie[:50]}...[/dim]")
+            
+            # Update config cookies
+            from senshi.utils.http import parse_cookies
+            config.cookies.update(parse_cookies(session_cookie))
+        else:
+            console.print(f"  [red]✗ Login FAILED - check credentials[/red]")
+            raise typer.Exit(1)
+    elif login_url or username or password:
+        console.print("[yellow]! Warning: Missing some login credentials (need url, user, AND pass)[/yellow]")
+    
     if provider:
         config.provider = provider
     if auth:
         config.auth = auth
     
-    # Parse cookies
+    # Parse cookies override
     if cookie:
         from senshi.utils.http import parse_cookies
         config.cookies.update(parse_cookies(cookie))
-        
-    if login_url:
-        config.login_url = login_url
-    if username:
-        config.username = username
-    if password:
-        config.password = password
         
     config.__post_init__()
 
@@ -362,23 +433,6 @@ def recon(
         rate_limit=config.rate_limit,
         timeout=config.timeout,
     )
-
-    # Auto-Auth for Recon
-    if config.login_url and config.username:
-        from senshi.auth.manager import AuthManager
-        auth_manager = AuthManager(
-            login_url=config.login_url,
-            username=config.username,
-            password=config.password
-        )
-        print_status(f"Authenticating at {config.login_url}...")
-        cookie = auth_manager.login_sync(session._get_client())
-        if cookie:
-            print_success("Auto-authentication successful!")
-            from senshi.utils.http import parse_cookies
-            session.update_cookies(parse_cookies(cookie))
-        else:
-            print_error("Auto-authentication failed!")
 
     # Tech detection
     tech = TechDetector(session)

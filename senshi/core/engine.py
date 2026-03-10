@@ -143,23 +143,6 @@ class ScanEngine:
             )
             session.config = self.config # For PentestAgent style access if needed
 
-            # Handle Auto-Auth BEFORE tech detection and crawl
-            if self.config.login_url and self.config.username:
-                from senshi.auth.manager import AuthManager
-                auth_manager = AuthManager(
-                    login_url=self.config.login_url,
-                    username=self.config.username,
-                    password=self.config.password
-                )
-                print_status(f"Authenticating at {self.config.login_url}...")
-                cookie = auth_manager.login_sync(session._get_client())
-                if cookie:
-                    print_success("Auto-authentication successful!")
-                    from senshi.utils.http import parse_cookies
-                    session.update_cookies(parse_cookies(cookie))
-                else:
-                    print_error("Auto-authentication failed! Check your credentials.")
-
             # Validate session
             if not session.is_alive():
                 print_error("Session is invalid or expired. Check your --cookie / --auth / --login-url.")
