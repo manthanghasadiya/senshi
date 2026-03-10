@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.7] — 2026-03-10
+### Fixed
+- **urljoin Normalization**: Fixed a critical crawler bug where relative links were resolved incorrectly because the base URL lacked a trailing slash.
+- **Path Handling**: Implemented smart trailing slash detection that correctly separates filenames from directory paths during normalization.
+
 ## [0.6.6] — 2026-03-09
 ### Debug
 - **Crawl Debugging**: Added verbose standard output logging to the crawler to track response body content and link extraction progress.

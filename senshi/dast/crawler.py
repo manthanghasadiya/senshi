@@ -195,6 +195,17 @@ class Crawler:
         if not href or href.startswith(('javascript:', 'mailto:', 'tel:', '#')):
             return None
             
+        # CRITICAL: Ensure base_url ends with / for proper urljoin behavior
+        if not base_url.endswith('/'):
+            # If base_url looks like a file (has extension), get parent directory
+            last_part = base_url.split('/')[-1]
+            if '.' in last_part:
+                # It's a file like /DVWA/index.php -> /DVWA/
+                base_url = base_url.rsplit('/', 1)[0] + '/'
+            else:
+                # It's a directory like /DVWA -> /DVWA/
+                base_url = base_url + '/'
+
         # 1. Handle root-relative URLs (e.g., /vulnerabilities/)
         if href.startswith('/') and not href.startswith('//'):
             # Detect if we need to prepend the application base path
@@ -206,8 +217,7 @@ class Crawler:
             # 2. Absolute URL
             full_url = href
         else:
-            # 3. Relative path (e.g. vulnerabilities/sqli/) - resolves against base page
-            # Correctly handle if base_url is a file like about.php
+            # 3. Relative path (e.g. vulnerabilities/sqli/) - urljoin will now work correctly
             full_url = urljoin(base_url, href)
         
         try:
