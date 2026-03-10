@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.1] — 2026-03-09
+### Fixed
+- **Missing Dependencies**: Fixed `ModuleNotFoundError: No module named 'bs4'` by ensuring `beautifulsoup4` and `nest_asyncio` are correctly handled.
+- **Auto-Login**: Guaranteed authentication flow with explicit CLI Phase 0 execution.
+
 ## [0.5.9] — 2026-03-09
 ### Fixed
 - **Auto-Login Execution**: Fixed a sync/async mismatch that was silently preventing the auto-login from running in `ScanEngine`.
