@@ -114,6 +114,27 @@ class Session:
         # Stats
         self.request_count = 0
 
+    @property
+    def cookies(self) -> dict[str, str]:
+        """Get combined cookies (default + auth)."""
+        return {**self._default_cookies, **self._auth_cookies}
+
+    def update_cookies(self, cookies: dict[str, str]) -> None:
+        """Update session cookies and sync with active clients."""
+        self._auth_cookies.update(cookies)
+        if self._client:
+            self._client.cookies.update(cookies)
+        if self._async_client:
+            self._async_client.cookies.update(cookies)
+
+    def update_headers(self, headers: dict[str, str]) -> None:
+        """Update session headers and sync with active clients."""
+        self._auth_headers.update(headers)
+        if self._client:
+            self._client.headers.update(headers)
+        if self._async_client:
+            self._async_client.headers.update(headers)
+
     def _get_client(self) -> httpx.Client:
         """Get or create persistent sync client."""
         if self._client is None:

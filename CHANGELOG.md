@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.5.8] — 2026-03-09
+### Fixed
+- **Auth Before Recon**: Moved auto-authentication to Phase 0, strictly before reconnaissance and tech detection. This ensures the crawler discovers authenticated endpoints.
+- **Session Propagation**: Added `update_cookies` and `update_headers` to `Session` to correctly sync authentication state across active HTTP clients.
+- **Bug**: Fixed `AttributeError` when accessing `session.cookies`.
+
 ## [0.5.7] — 2026-03-09
 ### Added
 - **Smart Auto-Authentication**: Automatically detects login forms, extracts CSRF tokens, and performs login.
