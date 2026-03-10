@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.4] — 2026-03-09
+### Fixed
+- **Crawler Base Path Preservation**: Fixed a bug where the crawler would strip application base paths (like `/DVWA/`) from root-relative URLs, resulting in 404 errors.
+- **Improved Scoping**: Enforced strict path scoping to ensure the crawler stays within the target application's directory.
+
 ## [0.6.3] — 2026-03-09
 ### Fixed
 - **Crawler URL Resolution**: Switched to robust `urljoin` resolution to prevent path stacking (e.g., `/about.php/vulnerabilities/`).

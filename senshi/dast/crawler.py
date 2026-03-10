@@ -64,6 +64,12 @@ class Crawler:
         self.max_depth = max_depth
         self._visited: set[str] = set()
         self._endpoints: list[DiscoveredEndpoint] = []
+        
+        # Extract application base path and domain for scope handling
+        parsed = urlparse(self.session.base_url)
+        self.domain = f"{parsed.scheme}://{parsed.netloc}"
+        # app_base is the path prefix, e.g., "/DVWA"
+        self.app_base = parsed.path.rstrip('/')
 
     SENSITIVE_ENDPOINTS_TO_CHECK = [
         "/redirect",
@@ -169,25 +175,33 @@ class Crawler:
             self._add_endpoint(ep, "GET", source="api_pattern")
 
     def _normalize_url(self, href: str, base_url: str) -> str | None:
-        """Normalize URL using urljoin and enforce scope/scannability."""
-        if not href:
+        """Normalize URL preserving application base path."""
+        if not href or href.startswith(('javascript:', 'mailto:', 'tel:', '#')):
             return None
             
-        # urljoin handles all cases correctly:
-        # - Absolute URLs: returned as-is
-        # - Path relative: resolves against base page
-        # - Root relative: resolves against base domain
-        full_url = urljoin(base_url, href)
+        # Handle root-relative URLs (e.g., /vulnerabilities/)
+        if href.startswith('/') and not href.startswith('//'):
+            # Detect if we need to prepend the application base path
+            if self.app_base and not href.startswith(self.app_base + '/'):
+                if href != self.app_base:  # Don't double up if it's exactly the base
+                    href = self.app_base + href
+            full_url = self.domain + href
+        else:
+            # For relative paths, use urljoin (handles them vs directories/files correctly)
+            full_url = urljoin(base_url, href)
         
         try:
-            target_parsed = urlparse(self.session.base_url)
             url_parsed = urlparse(full_url)
             
-            # Only accept URLs on same host
-            if url_parsed.netloc != target_parsed.netloc:
+            # Enforce same domain
+            if f"{url_parsed.scheme}://{url_parsed.netloc}" != self.domain:
                 return None
             
-            # Filter out non-scannable stuff
+            # Enforce app base path scope (don't wander into other root paths)
+            if self.app_base and not url_parsed.path.startswith(self.app_base):
+                return None
+            
+            # Filter out non-scannable stuff (JS, CSS, logout)
             if not self._is_scannable(full_url):
                 return None
                 
