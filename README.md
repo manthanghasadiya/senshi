@@ -70,7 +70,7 @@ export DEEPSEEK_API_KEY="sk-..."
 ### 2. Scan
 
 ```bash
-# Autonomous Black-Box Pentest (v0.5.0)
+# Autonomous Black-Box Pentest (v0.6.8)
 senshi pentest https://target.com --provider deepseek --browser --verbose
 
 # DAST \u2014 scan live targets
