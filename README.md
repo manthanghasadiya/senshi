@@ -160,7 +160,7 @@ senshi report findings.json --platform hackerone --output report.md
 
 ## Architecture
 
-Senshi operates on an autonomous **Think \u2192 Act \u2192 Observe** loop, building context across iterations:
+Senshi operates on an autonomous **Think -> Act -> Observe** loop, building context across iterations:
 
 ```mermaid
 graph TD
