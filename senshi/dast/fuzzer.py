@@ -161,6 +161,9 @@ class DeterministicFuzzer:
             "possible": Confidence.POSSIBLE,
         }
 
+        CMDI_EVIDENCE_PATTERNS = ["uid=", "gid=", "groups=", "root:", "www-data", 
+                                  "Directory of", "Volume Serial Number", "command not found"]
+
         for item in response.get("findings", []):
             if not item.get("is_vulnerable"):
                 continue
@@ -168,6 +171,14 @@ class DeterministicFuzzer:
             idx = item.get("payload_index", 0)
             if 0 <= idx < len(results):
                 res = results[idx]
+                
+                # STRICT CMDi verification — require actual command output
+                if res.get("vuln_type") == "cmdi" or item.get("vulnerability_type") == "cmdi" or item.get("vuln_type") == "cmdi":
+                    has_evidence = any(pattern in res.get("body", "") for pattern in CMDI_EVIDENCE_PATTERNS)
+                    if not has_evidence:
+                        logger.debug(f"CMDi rejected — no command output in response: {res.get('payload', '')}")
+                        continue
+                
                 finding = Finding(
                     title=item.get("title", f"{item.get('vuln_type', 'vuln').upper()} detected"),
                     severity=severity_map.get(item.get("severity", "medium"), Severity.MEDIUM),
