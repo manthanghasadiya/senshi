@@ -297,44 +297,61 @@ def pentest(
             with BrowserEngine(headless=True) as engine:
                 if 'session_cookie' in locals() and session_cookie:
                     from senshi.utils.http import parse_cookies
-                    engine.set_cookies(list(parse_cookies(session_cookie).values()) if isinstance(parse_cookies(session_cookie), dict) else [{"name": k, "value": v} for k, v in parse_cookies(session_cookie).items()], urlparse(url).netloc)
+                    cookies_dict = parse_cookies(session_cookie)
+                    cookies_list = [{"name": k, "value": v} for k, v in cookies_dict.items()]
+                    engine.set_cookies(cookies_list, urlparse(url).netloc)
                 elif config.cookies:
                     cookies_list = [{"name": k, "value": v} for k, v in config.cookies.items()]
                     engine.set_cookies(cookies_list, urlparse(url).netloc)
                 
                 spa_crawler = SPACrawler(engine)
-                spa_results = spa_crawler.crawl(url)
+                try:
+                    spa_results = spa_crawler.crawl(url)
+                    
+                    api_endpoints = spa_results.get('api_endpoints', [])
+                    forms = spa_results.get('forms', [])
+                    pages = spa_results.get('pages', [])
+                    
+                    console.print(f"  Discovered {len(api_endpoints)} API endpoints")
+                    console.print(f"  Found {len(forms)} forms")
+                    
+                    xss_scanner = DOMXSSScanner(engine)
+                    
+                    for endpoint in pages:
+                        params = list(parse_qs(urlparse(endpoint).query).keys())
+                        for param in params:
+                            results = xss_scanner.scan_parameter(endpoint, param)
+                            for res in results:
+                                if res.vulnerable:
+                                    finding = Finding(
+                                        title=f"DOM XSS in {param}",
+                                        severity=Severity.CRITICAL,
+                                        confidence=Confidence.CONFIRMED,
+                                        category="xss",
+                                        mode=ScanMode.DAST,
+                                        endpoint=endpoint,
+                                        payload=res.payload,
+                                        description=res.execution_proof,
+                                        evidence=res.evidence.screenshot_path,
+                                        confirmed=True,
+                                    )
+                                    agent.context.add_finding(finding)
+                                    print_finding(finding.severity.value, finding.title, finding.endpoint)
+                    for form in forms:
+                        finding = xss_scanner.scan_context(engine.new_page(), endpoint, "form_input", form)
+                        if finding:
+                            agent.context.add_finding(finding)
+                            print_finding(finding.severity.value, finding.title, finding.endpoint)
+                except Exception as e:
+                    console.print(f"\n[bold red]✗ Browser engine failed to connect:[/bold red] {e}")
+                    if "ERR_CONNECTION_REFUSED" in str(e) or "ERR_NAME_NOT_RESOLVED" in str(e):
+                        console.print(f"  [yellow]Hint: Could not reach {url}. Double check if the IP Address or Domain is correct and running.[/yellow]")
+                    console.print("  [dim]Skipping browser-based discovery and falling back to standard recon mode...[/dim]")
+                    spa_results = {}
+                    api_endpoints = []
+                    forms = []
                 
-                api_endpoints = spa_results.get('api_endpoints', [])
-                forms = spa_results.get('forms', [])
-                pages = spa_results.get('pages', [])
-                
-                console.print(f"  Discovered {len(api_endpoints)} API endpoints")
-                console.print(f"  Found {len(forms)} forms")
-                
-                xss_scanner = DOMXSSScanner(engine)
-                
-                for endpoint in pages:
-                    params = list(parse_qs(urlparse(endpoint).query).keys())
-                    for param in params:
-                        results = xss_scanner.scan_parameter(endpoint, param)
-                        for res in results:
-                            if res.vulnerable:
-                                finding = Finding(
-                                    title=f"DOM XSS in {param}",
-                                    severity=Severity.CRITICAL,
-                                    confidence=Confidence.CONFIRMED,
-                                    category="xss",
-                                    mode=ScanMode.DAST,
-                                    endpoint=endpoint,
-                                    payload=res.payload,
-                                    description=res.execution_proof,
-                                    evidence=res.evidence.screenshot_path,
-                                    confirmed=True,
-                                )
-                                agent.context.add_finding(finding)
-                                print_finding(finding.severity.value, finding.title, finding.endpoint)
-                
+                console.print("\n[bold cyan]Phase 1:[/bold cyan] Autonomous Agent Started...")
                 found_eps = [{"url": ep["url"], "method": ep["method"]} for ep in api_endpoints]
                 found_eps.extend([{"url": f["action"], "method": f["method"]} for f in forms])
                 agent.context.add_endpoints(found_eps)
