@@ -208,7 +208,15 @@ class AppInteractor:
                 document.querySelectorAll('button, input[type="submit"], input[type="button"]').forEach(addElement);
 
                 // Elements with click handlers
-                document.querySelectorAll('[onclick], [ng-click], [(click)], [v-on\\\\:click], [@click]').forEach(addElement);
+                document.querySelectorAll('*').forEach(el => {
+                    if (el.hasAttribute('onclick') || 
+                        el.hasAttribute('ng-click') || 
+                        el.hasAttribute('(click)') || 
+                        el.hasAttribute('v-on:click') || 
+                        el.hasAttribute('@click')) {
+                        addElement(el);
+                    }
+                });
 
                 // ARIA roles
                 document.querySelectorAll('[role="button"], [role="link"], [role="tab"], [role="menuitem"]').forEach(addElement);

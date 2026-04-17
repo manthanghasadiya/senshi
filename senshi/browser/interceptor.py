@@ -334,7 +334,7 @@ class TrafficInterceptor:
         har = {
             "log": {
                 "version": "1.2",
-                "creator": {"name": "Senshi", "version": "1.0"},
+                "creator": {"name": "Senshi", "version": "1.0.0"},
                 "entries": entries,
             }
         }
