@@ -1,297 +1,362 @@
 """
-Traffic Interceptor - Captures all browser traffic for analysis and injection.
+TrafficInterceptor -- captures ALL browser network traffic.
 
-This is the core of browser-instrumented pentesting. Every request/response
-flows through here, giving us:
-1. Complete visibility into app communication
-2. Ability to inject payloads into any request
-3. Response capture for verification
+This is the CORE of Senshi's discovery. Instead of parsing HTML for links,
+we watch what the browser actually does. Every XHR, fetch, document load,
+and WebSocket message is recorded, deduplicated, and made available for
+analysis.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import re
 import time
-from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import urlparse
+
+from senshi.models.request import CapturedRequest
+from senshi.models.response import CapturedResponse
 
 logger = logging.getLogger("senshi.browser.interceptor")
 
-
-@dataclass
-class CapturedRequest:
-    """Represents a captured HTTP request."""
-
-    url: str
-    method: str
-    headers: dict[str, str]
-    post_data: Optional[str]
-    post_data_json: Optional[dict]
-    resource_type: str
-    timestamp: float
-
-    # Extracted components
-    base_url: str = ""
-    path: str = ""
-    query_params: dict[str, list[str]] = field(default_factory=dict)
-    body_params: dict[str, Any] = field(default_factory=dict)
-    path_params: list[str] = field(default_factory=list)
-
-    def __post_init__(self) -> None:
-        parsed = urlparse(self.url)
-        self.base_url = f"{parsed.scheme}://{parsed.netloc}"
-        self.path = parsed.path
-        self.query_params = parse_qs(parsed.query)
-
-        if self.post_data:
-            content_type = self.headers.get("content-type", "")
-            if "application/json" in content_type:
-                try:
-                    self.post_data_json = json.loads(self.post_data)
-                    self.body_params = self._flatten_json(self.post_data_json)
-                except json.JSONDecodeError:
-                    pass
-            elif "application/x-www-form-urlencoded" in content_type:
-                self.body_params = {k: v[0] if len(v) == 1 else v for k, v in parse_qs(self.post_data).items()}
-
-        self.path_params = self._detect_path_params()
-
-    def _flatten_json(self, obj: Any, prefix: str = "") -> dict[str, Any]:
-        """Flatten nested JSON into dot-notation keys."""
-        items: dict[str, Any] = {}
-        if isinstance(obj, dict):
-            for k, v in obj.items():
-                new_key = f"{prefix}.{k}" if prefix else k
-                if isinstance(v, (dict, list)):
-                    items.update(self._flatten_json(v, new_key))
-                else:
-                    items[new_key] = v
-        elif isinstance(obj, list):
-            for i, v in enumerate(obj):
-                new_key = f"{prefix}[{i}]"
-                if isinstance(v, (dict, list)):
-                    items.update(self._flatten_json(v, new_key))
-                else:
-                    items[new_key] = v
-        return items
-
-    def _detect_path_params(self) -> list[str]:
-        """Detect likely path parameters (numeric IDs, UUIDs, etc.)."""
-        params = []
-        parts = self.path.split("/")
-        for i, part in enumerate(parts):
-            if re.match(r"^\d+$", part):
-                params.append(f"path[{i}]:numeric")
-            elif re.match(r"^[a-f0-9-]{36}$", part, re.I):
-                params.append(f"path[{i}]:uuid")
-            elif re.match(r"^[a-f0-9]{24}$", part, re.I):
-                params.append(f"path[{i}]:objectid")
-        return params
-
-    def get_all_params(self) -> dict[str, Any]:
-        """Get all parameters organized by location."""
-        return {
-            "query": self.query_params,
-            "body": self.body_params,
-            "path": self.path_params,
-            "header": {
-                k: v
-                for k, v in self.headers.items()
-                if k.lower() in ["x-forwarded-for", "x-real-ip", "host", "origin", "referer"]
-            },
-        }
-
-
-@dataclass
-class CapturedResponse:
-    """Represents a captured HTTP response."""
-
-    url: str
-    status: int
-    headers: dict[str, str]
-    body: bytes
-    body_text: str = ""
-    timestamp: float = 0.0
-
-    def __post_init__(self) -> None:
-        try:
-            self.body_text = self.body.decode("utf-8", errors="replace")
-        except Exception:
-            self.body_text = ""
-
-    def contains_pattern(self, patterns: list[str]) -> list[str]:
-        """Check if response contains any of the given patterns."""
-        return [p for p in patterns if p.lower() in self.body_text.lower()]
-
-
-@dataclass
-class InterceptedExchange:
-    """A request-response pair."""
-
-    request: CapturedRequest
-    response: Optional[CapturedResponse] = None
+# File extensions that are almost never interesting for security testing
+_STATIC_EXTENSIONS = frozenset({
+    ".css", ".js", ".map", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+    ".ico", ".woff", ".woff2", ".ttf", ".eot", ".webp", ".avif",
+    ".mp4", ".mp3", ".ogg", ".webm",
+})
 
 
 class TrafficInterceptor:
     """
-    Intercepts all browser traffic for analysis and payload injection.
+    Captures all HTTP traffic flowing through a Playwright page.
 
-    Usage (async Playwright context):
-        interceptor = TrafficInterceptor(target_base_url="http://target.com")
+    Attach to a page, then browse normally. Every request and response
+    to the target domain is recorded. Static assets are skipped by default.
+
+    Usage:
+        interceptor = TrafficInterceptor("target.example.com")
         await interceptor.attach(page)
-        await page.goto("http://target.com")
-        endpoints = interceptor.get_discovered_endpoints()
+        # ... navigate, click, interact ...
+        endpoints = interceptor.get_api_endpoints()
     """
 
-    def __init__(self, target_base_url: str) -> None:
-        self.target_base = target_base_url.rstrip("/")
-        self.target_host = urlparse(target_base_url).netloc
+    def __init__(
+        self,
+        target_domain: str,
+        *,
+        capture_static: bool = False,
+        max_body_size: int = 100_000,
+    ) -> None:
+        """
+        Args:
+            target_domain: Only capture traffic to this domain (and subdomains).
+            capture_static: If True, also capture .css/.js/.png etc.
+            max_body_size: Max response body bytes to store (truncated after).
+        """
+        self.target_domain = target_domain.lower()
+        self.capture_static = capture_static
+        self.max_body_size = max_body_size
 
-        self.exchanges: list[InterceptedExchange] = []
-        self.requests: dict[str, CapturedRequest] = {}
+        self.requests: list[CapturedRequest] = []
+        self.responses: dict[str, CapturedResponse] = {}  # keyed by URL
+        self.websocket_messages: list[dict[str, Any]] = []
 
-        self._injection_callback: Optional[Callable] = None
+        self._request_callbacks: list[Callable[[CapturedRequest], None]] = []
+        self._response_callbacks: list[Callable[[CapturedResponse], None]] = []
 
-        self.capture_resources = {"document", "xhr", "fetch", "websocket"}
-        self.ignore_extensions = {".js", ".css", ".png", ".jpg", ".gif", ".svg", ".woff", ".woff2", ".ico"}
+    # ── Attach to page ───────────────────────────────────────────────
 
     async def attach(self, page: Any) -> None:
-        """Attach interceptor to a Playwright page (async API)."""
-        page.on("request", self._on_request)
-        page.on("response", self._on_response)
-        await page.route("**/*", self._route_handler)
-        logger.info(f"Interceptor attached, targeting {self.target_host}")
+        """
+        Attach event listeners to a Playwright Page (async API).
 
-    def _on_request(self, request: Any) -> None:
-        """Capture outgoing request."""
-        if self.target_host not in request.url:
-            return
+        Captures:
+          - All outgoing requests
+          - All incoming responses
+          - WebSocket frames
+        """
+        page.on("request", self._handle_request)
+        page.on("response", self._handle_response)
+        page.on("websocket", self._handle_websocket)
+        logger.info("Interceptor attached -- capturing traffic for %s", self.target_domain)
 
-        path = urlparse(request.url).path
-        if any(path.endswith(ext) for ext in self.ignore_extensions):
+    # ── Internal handlers ────────────────────────────────────────────
+
+    def _handle_request(self, pw_request: Any) -> None:
+        """Handle an outgoing Playwright request."""
+        url = pw_request.url
+
+        if not self._should_capture(url):
             return
 
         captured = CapturedRequest(
-            url=request.url,
-            method=request.method,
-            headers=dict(request.headers),
-            post_data=request.post_data,
-            post_data_json=None,
-            resource_type=request.resource_type,
+            url=url,
+            method=pw_request.method,
+            headers=dict(pw_request.headers),
+            body=pw_request.post_data,
             timestamp=time.time(),
+            resource_type=pw_request.resource_type,
         )
+        self.requests.append(captured)
 
-        self.requests[request.url] = captured
-        self.exchanges.append(InterceptedExchange(request=captured))
-        logger.debug(f"Captured: {request.method} {request.url}")
+        for cb in self._request_callbacks:
+            try:
+                cb(captured)
+            except Exception as exc:
+                logger.debug("Request callback error: %s", exc)
 
-    async def _on_response(self, response: Any) -> None:
-        """Capture incoming response."""
-        if self.target_host not in response.url:
+    async def _handle_response(self, pw_response: Any) -> None:
+        """Handle an incoming Playwright response."""
+        url = pw_response.url
+
+        if not self._should_capture(url):
             return
 
         try:
-            body = await response.body()
+            raw_body = await pw_response.body()
+            body_text = raw_body[:self.max_body_size].decode("utf-8", errors="replace")
         except Exception:
-            body = b""
+            body_text = ""
+
+        timing = pw_response.request.timing
+        timing_ms = timing.get("responseEnd", 0) - timing.get("requestStart", 0) if timing else 0.0
 
         captured = CapturedResponse(
-            url=response.url,
-            status=response.status,
-            headers=dict(response.headers),
-            body=body[:50000],
-            timestamp=time.time(),
+            url=url,
+            status=pw_response.status,
+            headers=dict(pw_response.headers),
+            body=body_text,
+            timing_ms=max(timing_ms, 0.0),
         )
+        self.responses[url] = captured
 
-        for exchange in reversed(self.exchanges):
-            if exchange.request.url == response.url and exchange.response is None:
-                exchange.response = captured
-                break
-
-        logger.debug(f"Response: {response.status} {response.url} ({len(body)} bytes)")
-
-    async def _route_handler(self, route: Any) -> None:
-        """Handle route for optional payload injection."""
-        request = route.request
-
-        if self._injection_callback and self.target_host in request.url:
+        for cb in self._response_callbacks:
             try:
-                modification = self._injection_callback(request)
-                if modification:
-                    await route.continue_(
-                        method=modification.get("method", request.method),
-                        headers=modification.get("headers", request.headers),
-                        post_data=modification.get("post_data", request.post_data),
-                    )
-                    return
-            except Exception as e:
-                logger.error(f"Injection callback error: {e}")
+                cb(captured)
+            except Exception as exc:
+                logger.debug("Response callback error: %s", exc)
 
-        await route.continue_()
+    def _handle_websocket(self, ws: Any) -> None:
+        """Track WebSocket connections and messages."""
+        ws_url = ws.url
+        logger.debug("WebSocket opened: %s", ws_url)
 
-    def set_injection_callback(self, callback: Callable) -> None:
-        """Set a callback for payload injection. Callback receives a Request and returns dict or None."""
-        self._injection_callback = callback
+        def on_frame(payload: Any) -> None:
+            self.websocket_messages.append({
+                "url": ws_url,
+                "data": str(payload)[:5000],
+                "timestamp": time.time(),
+            })
 
-    def clear_injection(self) -> None:
-        """Remove injection callback."""
-        self._injection_callback = None
+        ws.on("framereceived", lambda payload: on_frame(payload))
+        ws.on("framesent", lambda payload: on_frame(payload))
 
-    def get_discovered_endpoints(self) -> list[dict]:
-        """Get unique endpoints discovered from traffic."""
+    def _should_capture(self, url: str) -> bool:
+        """Decide whether to record this URL."""
+        parsed = urlparse(url)
+        host = parsed.netloc.lower()
+
+        # Must be targeting our domain (or subdomain)
+        if self.target_domain not in host:
+            return False
+
+        # Skip static assets unless explicitly requested
+        if not self.capture_static:
+            path_lower = parsed.path.lower()
+            if any(path_lower.endswith(ext) for ext in _STATIC_EXTENSIONS):
+                return False
+
+        return True
+
+    # ── Callbacks ────────────────────────────────────────────────────
+
+    def on_request(self, callback: Callable[[CapturedRequest], None]) -> None:
+        """Register a callback invoked for every captured request (real-time)."""
+        self._request_callbacks.append(callback)
+
+    def on_response(self, callback: Callable[[CapturedResponse], None]) -> None:
+        """Register a callback invoked for every captured response."""
+        self._response_callbacks.append(callback)
+
+    # ── Query methods ────────────────────────────────────────────────
+
+    def get_api_endpoints(self) -> list[CapturedRequest]:
+        """
+        Return deduplicated API requests (XHR and fetch only).
+
+        Dedup key: (method, path, sorted param names).
+        This ensures /api/users?id=1 and /api/users?id=2 collapse into one.
+        """
         seen: set[str] = set()
-        endpoints = []
+        results: list[CapturedRequest] = []
 
-        for exchange in self.exchanges:
-            req = exchange.request
-            key = f"{req.method}:{req.path}"
-            if key in seen:
+        for req in self.requests:
+            if req.resource_type not in ("xhr", "fetch"):
                 continue
-            seen.add(key)
+            key = self._dedup_key(req)
+            if key not in seen:
+                seen.add(key)
+                results.append(req)
 
-            endpoints.append(
-                {
-                    "url": f"{req.base_url}{req.path}",
+        return results
+
+    def get_all_endpoints(self) -> list[CapturedRequest]:
+        """Return ALL unique captured requests (including document loads)."""
+        seen: set[str] = set()
+        results: list[CapturedRequest] = []
+
+        for req in self.requests:
+            key = self._dedup_key(req)
+            if key not in seen:
+                seen.add(key)
+                results.append(req)
+
+        return results
+
+    def get_unique_paths(self) -> set[str]:
+        """Return set of unique URL paths discovered."""
+        return {req.get_path() for req in self.requests}
+
+    def get_response(self, url: str) -> Optional[CapturedResponse]:
+        """Get the captured response for a URL, or None."""
+        return self.responses.get(url)
+
+    # ── Auth detection ───────────────────────────────────────────────
+
+    def detect_auth_scheme(self) -> dict[str, str]:
+        """
+        Analyze captured traffic to infer the authentication mechanism.
+
+        Returns:
+            {
+                "type": "bearer" | "cookie" | "api_key" | "basic" | "custom" | "none",
+                "token": "the actual value",
+                "header": "header name",
+                "cookie_name": "session cookie name (if cookie-based)",
+            }
+        """
+        result: dict[str, str] = {"type": "none"}
+
+        for req in self.requests:
+            # Bearer / Basic auth
+            auth_hdr = req.headers.get("authorization", "")
+            if auth_hdr:
+                if auth_hdr.lower().startswith("bearer "):
+                    return {"type": "bearer", "token": auth_hdr[7:], "header": "Authorization"}
+                if auth_hdr.lower().startswith("basic "):
+                    return {"type": "basic", "token": auth_hdr[6:], "header": "Authorization"}
+
+            # API key headers
+            for hdr in ("x-api-key", "x-auth-token", "api-key", "apikey"):
+                val = req.headers.get(hdr, "")
+                if val:
+                    return {"type": "api_key", "token": val, "header": hdr}
+
+            # Cookie-based sessions
+            cookie_hdr = req.headers.get("cookie", "")
+            if cookie_hdr:
+                session_names = [
+                    "phpsessid", "jsessionid", "sessionid", "session",
+                    "sid", "token", "auth", "connect.sid", "asp.net_sessionid",
+                ]
+                for pair in cookie_hdr.split(";"):
+                    pair = pair.strip()
+                    if "=" not in pair:
+                        continue
+                    name = pair.split("=", 1)[0].strip().lower()
+                    if any(sn in name for sn in session_names):
+                        val = pair.split("=", 1)[1].strip()
+                        result = {
+                            "type": "cookie",
+                            "token": val,
+                            "cookie_name": pair.split("=", 1)[0].strip(),
+                        }
+
+        return result
+
+    # ── Statistics ───────────────────────────────────────────────────
+
+    def get_stats(self) -> dict[str, Any]:
+        api = self.get_api_endpoints()
+        all_endpoints = self.get_all_endpoints()
+        unique_params = set()
+        for req in all_endpoints:
+            for p in req.get_params():
+                unique_params.add((p.name, p.location))
+
+        return {
+            "total_requests": len(self.requests),
+            "api_requests": len(api),
+            "unique_endpoints": len(all_endpoints),
+            "unique_params": len(unique_params),
+            "unique_paths": len(self.get_unique_paths()),
+            "websocket_messages": len(self.websocket_messages),
+            "auth_detected": self.detect_auth_scheme()["type"] != "none",
+        }
+
+    # ── HAR export ───────────────────────────────────────────────────
+
+    def export_har(self, path: str) -> None:
+        """
+        Export captured traffic as HAR 1.2 (HTTP Archive).
+        Compatible with Burp Suite, OWASP ZAP, Chrome DevTools.
+        """
+        entries = []
+        for req in self.requests:
+            resp = self.responses.get(req.url)
+            entry: dict[str, Any] = {
+                "startedDateTime": time.strftime(
+                    "%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(req.timestamp)
+                ),
+                "request": {
                     "method": req.method,
-                    "content_type": req.headers.get("content-type", ""),
-                    "params": req.get_all_params(),
-                    "has_auth": bool(req.headers.get("authorization") or req.headers.get("cookie")),
+                    "url": req.url,
+                    "headers": [{"name": k, "value": v} for k, v in req.headers.items()],
+                    "queryString": [
+                        {"name": p.name, "value": p.value}
+                        for p in req.get_params() if p.location == "query"
+                    ],
+                    "postData": {"text": req.body or "", "mimeType": req.headers.get("content-type", "")},
+                    "bodySize": len(req.body) if req.body else 0,
+                },
+            }
+            if resp:
+                entry["response"] = {
+                    "status": resp.status,
+                    "headers": [{"name": k, "value": v} for k, v in resp.headers.items()],
+                    "content": {"text": resp.body[:self.max_body_size], "size": len(resp.body)},
                 }
-            )
+                entry["time"] = resp.timing_ms
+            entries.append(entry)
 
-        return endpoints
+        har = {
+            "log": {
+                "version": "1.2",
+                "creator": {"name": "Senshi", "version": "1.0"},
+                "entries": entries,
+            }
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(har, f, indent=2)
+        logger.info("HAR exported: %s (%d entries)", path, len(entries))
 
-    def get_forms_discovered(self) -> list[dict]:
-        """Get form submissions (POSTs) from captured traffic."""
-        forms = []
-        for exchange in self.exchanges:
-            req = exchange.request
-            if req.method == "POST" and req.body_params:
-                forms.append(
-                    {
-                        "action": req.url,
-                        "method": "POST",
-                        "fields": list(req.body_params.keys()),
-                        "content_type": req.headers.get("content-type", ""),
-                    }
-                )
-        return forms
-
-    def find_response_for_url(self, url: str) -> Optional[CapturedResponse]:
-        """Find the most recent response for a URL."""
-        for exchange in reversed(self.exchanges):
-            if exchange.request.url == url and exchange.response:
-                return exchange.response
-        return None
-
-    def get_all_exchanges(self) -> list[InterceptedExchange]:
-        """Get all captured request-response pairs."""
-        return self.exchanges
+    # ── Reset ────────────────────────────────────────────────────────
 
     def clear(self) -> None:
-        """Clear all captured traffic."""
-        self.exchanges.clear()
+        """Clear all captured data."""
         self.requests.clear()
+        self.responses.clear()
+        self.websocket_messages.clear()
+
+    # ── Internal ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _dedup_key(req: CapturedRequest) -> str:
+        """Stable key for deduplication: method + path + sorted param names."""
+        param_names = sorted(
+            p.name for p in req.get_params()
+            if p.location in ("query", "body")
+        )
+        return f"{req.method}:{req.get_path()}:{','.join(param_names)}"

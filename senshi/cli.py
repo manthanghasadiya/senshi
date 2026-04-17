@@ -675,6 +675,239 @@ def config_cmd(
     console.print(f"  [dim]Config file: {config.CONFIG_DIR / 'config.json'}[/dim]" if hasattr(config, 'CONFIG_DIR') else "")
 
 
+# ── Phase 1: Browser-Instrumented Recon ─────────────────────
+
+@app.command()
+def recon(
+    target: str = typer.Argument(..., help="Target URL to scan"),
+    output: str = typer.Option("attack_surface.json", "--output", "-o", help="Output file path (.json)"),
+    headless: bool = typer.Option(True, "--headless/--no-headless", help="Run browser headlessly"),
+    max_pages: int = typer.Option(50, "--max-pages", help="Maximum pages to crawl"),
+    timeout: int = typer.Option(60, "--timeout", help="Navigation timeout in seconds"),
+    export_har: bool = typer.Option(False, "--har", help="Also export HAR file"),
+    proxy: str = typer.Option("", "--proxy", help="Proxy URL (e.g. http://127.0.0.1:8080)"),
+    cookie: str = typer.Option("", "--cookie", "-c", help="Session cookies ('key=val; key2=val2')"),
+    login_url: str = typer.Option("", help="Login page URL for automated auth"),
+    username: str = typer.Option("", "-u", help="Username for auto-auth"),
+    password: str = typer.Option("", "-p", help="Password for auto-auth"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """
+    Discover all endpoints and parameters from a web application.
+
+    Launches a real browser, navigates to the target, interacts with the
+    UI (clicks, forms, scrolling), and captures all API traffic to build
+    a complete attack surface.
+
+    Works on traditional HTML apps, SPAs (React/Angular/Vue), REST APIs,
+    and GraphQL -- anything the browser can reach.
+
+    Examples:
+        senshi recon https://target.com
+        senshi recon https://target.com -o results.json --har
+        senshi recon https://target.com --no-headless         # watch the browser
+        senshi recon http://10.0.0.151/DVWA/ --login-url http://10.0.0.151/DVWA/login.php -u admin -p password
+    """
+    import asyncio
+    from senshi.utils.logger import setup_global_logging
+
+    print_banner()
+    setup_global_logging(verbose)
+    asyncio.run(_recon_async(
+        target=target,
+        output=output,
+        headless=headless,
+        max_pages=max_pages,
+        timeout=timeout,
+        export_har=export_har,
+        proxy=proxy,
+        cookie=cookie,
+        login_url=login_url,
+        username=username,
+        password=password,
+        verbose=verbose,
+    ))
+
+
+async def _recon_async(
+    *,
+    target: str,
+    output: str,
+    headless: bool,
+    max_pages: int,
+    timeout: int,
+    export_har: bool,
+    proxy: str,
+    cookie: str,
+    login_url: str,
+    username: str,
+    password: str,
+    verbose: bool,
+) -> None:
+    """Async implementation of the recon command."""
+    from urllib.parse import urlparse
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    from senshi.browser.runtime import BrowserRuntime
+    from senshi.browser.interceptor import TrafficInterceptor
+    from senshi.browser.interactor import AppInteractor
+    from senshi.browser.analyzer import EndpointAnalyzer
+
+    target_domain = urlparse(target).netloc
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+
+        # ── 1. Launch browser ────────────────────────────────────────
+        task = progress.add_task("Launching headless Chromium...", total=None)
+        runtime = BrowserRuntime(headless=headless, timeout=timeout * 1000, proxy=proxy)
+        try:
+            await runtime.launch()
+        except Exception as exc:
+            print_error(f"Browser launch failed: {exc}")
+            print_error("Run: pip install playwright && playwright install chromium")
+            return
+        progress.update(task, description="[green]Browser launched[/green] ✓")
+
+        # ── 2. Authentication (if credentials provided) ──────────────
+        if login_url and username and password:
+            task = progress.add_task("Authenticating...", total=None)
+            try:
+                import httpx
+                from senshi.auth.manager import AuthManager
+
+                auth_mgr = AuthManager(login_url, username, password)
+                with httpx.Client(follow_redirects=True, timeout=30) as client:
+                    session_cookie = auth_mgr.login_sync(client)
+
+                if session_cookie:
+                    await runtime.set_cookies_from_string(session_cookie, target_domain)
+                    progress.update(task, description="[green]Authenticated[/green] ✓")
+                else:
+                    progress.update(task, description="[yellow]Auth failed -- continuing unauthenticated[/yellow]")
+            except Exception as exc:
+                progress.update(task, description=f"[yellow]Auth error: {exc}[/yellow]")
+
+        elif cookie:
+            await runtime.set_cookies_from_string(cookie, target_domain)
+
+        # ── 3. Attach interceptor ────────────────────────────────────
+        task = progress.add_task("Attaching traffic interceptor...", total=None)
+        page = await runtime.get_page()
+        interceptor = TrafficInterceptor(target_domain)
+        await interceptor.attach(page)
+        progress.update(task, description="[green]Interceptor attached[/green] ✓")
+
+        # ── 4. Navigate to target ────────────────────────────────────
+        task = progress.add_task(f"Navigating to {target}...", total=None)
+        try:
+            await runtime.navigate(target, wait_strategy="smart")
+            progress.update(task, description="[green]Navigation complete[/green] ✓")
+        except Exception as exc:
+            print_error(f"Could not reach {target}: {exc}")
+            await runtime.close()
+            return
+
+        # ── 5. Interactive crawl ─────────────────────────────────────
+        task = progress.add_task("Discovering endpoints via interaction...", total=None)
+        interactor = AppInteractor(page, interceptor, target_domain)
+
+        # Expand hidden nav
+        await interactor.expand_navigation()
+
+        # SPA crawl (clicks links, follows routes)
+        crawl_stats = await interactor.crawl_spa(max_pages=max_pages)
+
+        # Submit forms to discover handlers
+        forms_submitted = await interactor.fill_and_submit_forms()
+
+        # Scroll for lazy-loaded content
+        scroll_requests = await interactor.scroll_for_lazy_content()
+
+        # Trigger misc JS actions
+        js_requests = await interactor.trigger_javascript_actions()
+
+        stats = interceptor.get_stats()
+        progress.update(
+            task,
+            description=f"[green]Discovered {stats['unique_endpoints']} endpoints[/green] ✓",
+        )
+
+        # ── 6. Analyze traffic ───────────────────────────────────────
+        task = progress.add_task("Analyzing captured traffic...", total=None)
+        analyzer = EndpointAnalyzer(
+            requests=interceptor.get_all_endpoints(),
+            responses=interceptor.responses,
+        )
+        attack_surface = analyzer.build_attack_surface(
+            target_url=target,
+            auth_scheme=interceptor.detect_auth_scheme(),
+        )
+        progress.update(task, description="[green]Analysis complete[/green] ✓")
+
+        # ── 7. Save results ──────────────────────────────────────────
+        attack_surface.save(output)
+
+        if export_har:
+            har_path = output.replace(".json", ".har")
+            interceptor.export_har(har_path)
+            console.print(f"  [dim]HAR exported to: {har_path}[/dim]")
+
+        # ── 8. Close browser ─────────────────────────────────────────
+        await runtime.close()
+
+    # ── Print summary ────────────────────────────────────────────────
+    console.print()
+    _print_recon_summary(attack_surface)
+    console.print(f"\n  [green]Attack surface saved to: {output}[/green]")
+    console.print(f"  [dim]Load later with: AttackSurface.load(\"{output}\")[/dim]\n")
+
+
+def _print_recon_summary(surface: "AttackSurface") -> None:
+    """Rich table summarizing the discovered attack surface."""
+    from rich.table import Table as RichTable
+
+    # Stats table
+    stats_table = RichTable(title="Recon Summary", show_header=True)
+    stats_table.add_column("Metric", style="cyan", min_width=25)
+    stats_table.add_column("Value", style="green bold")
+
+    stats_table.add_row("Total Endpoints", str(surface.total_endpoints))
+    stats_table.add_row("Total Parameters", str(surface.total_params))
+    stats_table.add_row("Injectable Parameters", str(surface.injectable_params))
+    stats_table.add_row("Auth Scheme", surface.auth_scheme.get("type", "none"))
+    if surface.technologies:
+        stats_table.add_row("Technologies", ", ".join(surface.technologies[:5]))
+
+    console.print(stats_table)
+
+    # Top endpoints by risk
+    top = surface.get_endpoints_by_risk()[:15]
+    if top:
+        ep_table = RichTable(title="Top Endpoints (by risk)", show_header=True)
+        ep_table.add_column("Method", style="magenta", width=8)
+        ep_table.add_column("Path", style="blue")
+        ep_table.add_column("Params", style="white")
+        ep_table.add_column("Type", style="dim", width=6)
+
+        for ep in top:
+            param_names = [p.name for p in ep.get_injectable_params()[:4]]
+            more = len(ep.get_injectable_params()) - 4
+            params_str = ", ".join(param_names)
+            if more > 0:
+                params_str += f" (+{more})"
+            ep_table.add_row(
+                ep.method,
+                ep.path,
+                params_str or "-",
+                ep.content_type.value,
+            )
+
+        console.print(ep_table)
+
+
 def _write_output(result: "ScanResult", output: str) -> None:
     """Write scan results to the appropriate format."""
     if not output:
