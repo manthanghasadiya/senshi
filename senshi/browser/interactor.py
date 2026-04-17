@@ -169,8 +169,8 @@ class AppInteractor:
                         if (!href || href === '#' || href.startsWith('#')) return;
                         if (skip_protocols.some(p => href.toLowerCase().startsWith(p))) return;
 
-                        const url = new URL(href, window.location.origin);
-                        if (url.origin !== window.location.origin) return;
+                        const url = new URL(href, document.baseURI);
+                        if (url.origin !== new URL(document.baseURI).origin) return;
 
                         // Skip file downloads
                         const ext = url.pathname.split('.').pop()?.toLowerCase();
@@ -196,8 +196,10 @@ class AppInteractor:
             
             # Scope check: URL must be under target path prefix
             if self.target_path_prefix and not path.startswith(self.target_path_prefix.lower()):
+                logger.debug("Scope check failed for %s (prefix=%s, path=%s)", u, self.target_path_prefix.lower(), path)
                 continue
                 
+            logger.debug("Added URL after filter: %s", u)
             filtered_links.append(u)
             
         return filtered_links

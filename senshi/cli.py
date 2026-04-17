@@ -839,9 +839,16 @@ async def _recon_async(
             requests=interceptor.get_all_endpoints(),
             responses=interceptor.responses,
         )
+        auth_scheme = interceptor.detect_auth_scheme()
+        if auth_scheme["type"] == "none":
+            if cookie or extra_cookies:
+                auth_scheme = {"type": "cookie", "cookie_name": "injected", "token": "[hidden]"}
+            elif 'session_cookie' in locals() and session_cookie:
+                auth_scheme = {"type": "cookie", "cookie_name": "injected", "token": "[hidden]"}
+
         attack_surface = analyzer.build_attack_surface(
             target_url=target,
-            auth_scheme=interceptor.detect_auth_scheme(),
+            auth_scheme=auth_scheme,
         )
         progress.update(task, description="[green]Analysis complete[/green] ✓")
 
