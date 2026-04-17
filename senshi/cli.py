@@ -687,6 +687,7 @@ def recon(
     export_har: bool = typer.Option(False, "--har", help="Also export HAR file"),
     proxy: str = typer.Option("", "--proxy", help="Proxy URL (e.g. http://127.0.0.1:8080)"),
     cookie: str = typer.Option("", "--cookie", "-c", help="Session cookies ('key=val; key2=val2')"),
+    extra_cookies: str = typer.Option("", "--extra-cookies", help="Additional cookies to inject after login ('key=val; key2=val2')"),
     login_url: str = typer.Option("", help="Login page URL for automated auth"),
     username: str = typer.Option("", "-u", help="Username for auto-auth"),
     password: str = typer.Option("", "-p", help="Password for auto-auth"),
@@ -722,6 +723,7 @@ def recon(
         export_har=export_har,
         proxy=proxy,
         cookie=cookie,
+        extra_cookies=extra_cookies,
         login_url=login_url,
         username=username,
         password=password,
@@ -739,6 +741,7 @@ async def _recon_async(
     export_har: bool,
     proxy: str,
     cookie: str,
+    extra_cookies: str,
     login_url: str,
     username: str,
     password: str,
@@ -793,6 +796,9 @@ async def _recon_async(
         elif cookie:
             await runtime.set_cookies_from_string(cookie, target_domain)
 
+        if extra_cookies:
+            await runtime.set_cookies_from_string(extra_cookies, target_domain)
+
         # ── 3. Attach interceptor ────────────────────────────────────
         task = progress.add_task("Attaching traffic interceptor...", total=None)
         page = await runtime.get_page()
@@ -814,20 +820,12 @@ async def _recon_async(
         task = progress.add_task("Discovering endpoints via interaction...", total=None)
         interactor = AppInteractor(page, interceptor, target_domain)
 
-        # Expand hidden nav
-        await interactor.expand_navigation()
-
-        # SPA crawl (clicks links, follows routes)
+        # BFS crawl handles: link following, form submission, SPA clicks per-page
         crawl_stats = await interactor.crawl_spa(max_pages=max_pages)
 
-        # Submit forms to discover handlers
-        forms_submitted = await interactor.fill_and_submit_forms()
-
-        # Scroll for lazy-loaded content
-        scroll_requests = await interactor.scroll_for_lazy_content()
-
-        # Trigger misc JS actions
-        js_requests = await interactor.trigger_javascript_actions()
+        # Final scroll + JS triggers on last visited page
+        await interactor.scroll_for_lazy_content()
+        await interactor.trigger_javascript_actions()
 
         stats = interceptor.get_stats()
         progress.update(

@@ -66,21 +66,60 @@ class AppInteractor:
         max_depth: int = 3,
     ) -> dict[str, int]:
         """
-        Crawl a single-page application by interacting with UI elements.
+        Crawl any web application by combining link-based BFS with SPA interaction.
 
-        Instead of parsing HTML for links, we:
-        1. Find all clickable elements on the current page
-        2. Click each one
-        3. Observe what requests are triggered
-        4. If the URL changed, treat it as a new "page" and recurse
-        5. Navigate back and continue
-
-        Returns dict with crawl stats.
+        Works on:
+          - Traditional server-rendered apps (follows <a href> links)
+          - SPAs (clicks buttons, tabs, JS-driven elements)
+          - Hybrid apps (both)
+          - REST API docs/playgrounds (follows links + submits forms)
         """
         start_count = len(self.interceptor.requests)
-        await self._crawl_recursive(self.page.url, depth=0, max_depth=max_depth, max_pages=max_pages)
-        new_requests = len(self.interceptor.requests) - start_count
 
+        # BFS queue: (url, depth)
+        queue: list[tuple[str, int]] = [(self.page.url, 0)]
+
+        while queue and len(self.visited_urls) < max_pages:
+            url, depth = queue.pop(0)
+            if depth > max_depth:
+                continue
+
+            norm = self._normalize_url(url)
+            if norm in self.visited_urls:
+                continue
+            self.visited_urls.add(norm)
+
+            # Navigate to this page
+            try:
+                await self.page.goto(url, wait_until="domcontentloaded", timeout=10_000)
+                await self._wait_for_stable(timeout_ms=3_000)
+            except Exception as exc:
+                logger.debug("Navigation failed for %s: %s", url, exc)
+                continue
+
+            logger.debug("Crawling page [depth=%d]: %s", depth, url)
+
+            # Expand hidden navigation (hamburger menus, dropdowns, accordions)
+            await self.expand_navigation()
+
+            # Pass 1: Collect all <a href> links from this page
+            hrefs = await self._collect_hrefs()
+            for href in hrefs:
+                href_norm = self._normalize_url(href)
+                if href_norm not in self.visited_urls:
+                    queue.append((href, depth + 1))
+
+            # Submit forms on this page (discovers POST endpoints + params)
+            await self.fill_and_submit_forms()
+
+            # Pass 2: Click non-link interactive elements (SPA routes, buttons, tabs)
+            new_urls = await self._click_spa_elements()
+            for new_url in new_urls:
+                new_norm = self._normalize_url(new_url)
+                if new_norm not in self.visited_urls:
+                    queue.append((new_url, depth + 1))
+
+        new_requests = len(self.interceptor.requests) - start_count
         stats = {
             "pages_visited": len(self.visited_urls),
             "elements_clicked": len(self.clicked_selectors),
@@ -89,56 +128,106 @@ class AppInteractor:
         logger.info("SPA crawl complete: %s", stats)
         return stats
 
-    async def _crawl_recursive(
-        self,
-        url: str,
-        depth: int,
-        max_depth: int,
-        max_pages: int,
-    ) -> None:
-        """Recursive SPA crawl."""
-        if depth > max_depth or len(self.visited_urls) >= max_pages:
-            return
+    # ── Element Discovery ────────────────────────────────────────────
 
-        # Normalize URL for dedup
-        norm = url.split("#")[0].split("?")[0].rstrip("/")
-        if norm in self.visited_urls:
-            return
-        self.visited_urls.add(norm)
+    async def _collect_hrefs(self) -> list[str]:
+        """
+        Collect all <a href> URLs from the current page.
 
-        logger.debug("Crawling page [depth=%d]: %s", depth, url)
+        Framework-agnostic: works on server-rendered HTML, Angular routerLink,
+        React Link, Vue router-link — all eventually render as <a href>.
 
-        # Expand hidden elements first
-        await self.expand_navigation()
+        Filters:
+          - Same origin only
+          - Skips javascript:, mailto:, tel:, data:, blob:
+          - Skips file downloads (.pdf, .zip, .exe, etc.)
+          - Deduplicates
+        """
+        raw = await self.page.evaluate("""
+            () => {
+                const links = [];
+                const skip_extensions = new Set([
+                    '.pdf', '.zip', '.gz', '.tar', '.exe', '.dmg', '.msi',
+                    '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+                    '.mp4', '.mp3', '.avi', '.mov', '.wmv',
+                    '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp',
+                    '.css', '.js', '.map', '.woff', '.woff2', '.ttf', '.eot'
+                ]);
+                const skip_protocols = ['javascript:', 'mailto:', 'tel:', 'data:', 'blob:'];
 
-        # Find all interactive elements
+                document.querySelectorAll('a[href]').forEach(a => {
+                    try {
+                        const href = a.getAttribute('href');
+                        if (!href || href === '#' || href.startsWith('#')) return;
+                        if (skip_protocols.some(p => href.toLowerCase().startsWith(p))) return;
+
+                        const url = new URL(href, window.location.origin);
+                        if (url.origin !== window.location.origin) return;
+
+                        // Skip file downloads
+                        const ext = url.pathname.split('.').pop()?.toLowerCase();
+                        if (ext && skip_extensions.has('.' + ext)) return;
+
+                        links.push(url.href.split('#')[0]);  // Strip fragment
+                    } catch(e) {}
+                });
+                return [...new Set(links)];
+            }
+        """)
+        # Further filter to target domain
+        return [u for u in raw if self.target_domain in urlparse(u).netloc.lower()]
+
+    async def _click_spa_elements(self) -> list[str]:
+        """
+        Click interactive elements that don't have meaningful href attributes.
+        These are SPA route triggers: buttons, tabs, Angular (click) handlers, etc.
+
+        Returns list of new URLs discovered via clicks.
+        """
         elements = await self.discover_interactive_elements()
-        logger.debug("Found %d interactive elements on %s", len(elements), url)
+        new_urls: list[str] = []
 
-        # Click each element
-        for el in elements:
-            if len(self.visited_urls) >= max_pages:
+        # Filter to only non-link elements (links are handled by BFS)
+        spa_elements = [
+            el for el in elements
+            if not el.href
+            or el.href.strip() == '#'
+            or el.href.strip() == ''
+            or el.href.startswith('javascript:')
+        ]
+
+        for el in spa_elements:
+            if len(self.clicked_selectors) > 200:  # Safety cap per page
                 break
-
             result = await self.click_and_observe(el)
-
             if result.get("url_changed") and result.get("new_url"):
                 new_url = result["new_url"]
-                new_domain = urlparse(new_url).netloc.lower()
-                if self.target_domain in new_domain:
-                    await self._crawl_recursive(new_url, depth + 1, max_depth, max_pages)
-                    # Navigate back
-                    try:
-                        await self.page.go_back(wait_until="domcontentloaded", timeout=5_000)
-                        await self.page.wait_for_timeout(500)
-                    except Exception:
-                        try:
-                            await self.page.goto(url, wait_until="domcontentloaded", timeout=10_000)
-                            await self.page.wait_for_timeout(500)
-                        except Exception:
-                            pass
+                if self.target_domain in urlparse(new_url).netloc.lower():
+                    new_urls.append(new_url)
+                # Navigate back for the next click
+                try:
+                    await self.page.go_back(wait_until="domcontentloaded", timeout=5_000)
+                    await self.page.wait_for_timeout(500)
+                except Exception:
+                    # If go_back fails, just continue — we already captured the URL
+                    break
 
-    # ── Element Discovery ────────────────────────────────────────────
+        return new_urls
+
+    def _normalize_url(self, url: str) -> str:
+        """
+        Normalize URL for dedup. Strips fragment, query string, trailing slash,
+        and common index page filenames.
+
+        This is NOT target-specific — every web server has index pages.
+        """
+        url = url.split("#")[0].split("?")[0].rstrip("/")
+        # Normalize common index pages (standard web server behavior, not app-specific)
+        for suffix in ("/index.php", "/index.html", "/index.htm", "/index.jsp",
+                        "/index.asp", "/index.aspx", "/default.asp", "/default.aspx"):
+            if url.lower().endswith(suffix):
+                url = url[:len(url) - len(suffix)]
+        return url.rstrip("/") or url
 
     async def discover_interactive_elements(self) -> list[ElementInfo]:
         """
@@ -303,15 +392,11 @@ class AppInteractor:
     async def fill_and_submit_forms(self, strategy: str = "smart") -> int:
         """
         Find and submit all forms on the current page.
-
-        Strategies:
-          smart   -- detect field types and fill with realistic dummy data
-          empty   -- submit empty to provoke validation errors
-
-        Returns the number of forms submitted.
+        After each submission, navigates back if the page changed.
         """
         forms = await self._get_forms()
         submitted = 0
+        current_url = self.page.url  # Remember where we are
 
         for form in forms:
             form_key = f"{form.get('action', '')}:{','.join(f.get('name', '') for f in form.get('fields', []))}"
@@ -325,7 +410,15 @@ class AppInteractor:
             except Exception as exc:
                 logger.debug("Form submission failed: %s", exc)
 
-        logger.info("Submitted %d forms on %s", submitted, self.page.url)
+            # Navigate back if form submission caused navigation (redirect, etc.)
+            if self._normalize_url(self.page.url) != self._normalize_url(current_url):
+                try:
+                    await self.page.goto(current_url, wait_until="domcontentloaded", timeout=10_000)
+                    await self._wait_for_stable(timeout_ms=2_000)
+                except Exception:
+                    pass
+
+        logger.info("Submitted %d forms on %s", submitted, current_url)
         return submitted
 
     async def _get_forms(self) -> list[dict[str, Any]]:

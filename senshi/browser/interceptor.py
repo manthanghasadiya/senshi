@@ -114,21 +114,31 @@ class TrafficInterceptor:
         if not self._should_capture(url):
             return
 
+        # Body extraction
         try:
             raw_body = await pw_response.body()
             body_text = raw_body[:self.max_body_size].decode("utf-8", errors="replace")
         except Exception:
             body_text = ""
 
-        timing = pw_response.request.timing
-        timing_ms = timing.get("responseEnd", 0) - timing.get("requestStart", 0) if timing else 0.0
+        # Timing extraction (separate try/except — don't lose the response over timing)
+        timing_ms = 0.0
+        try:
+            timing = pw_response.request.timing
+            if timing:
+                timing_ms = max(
+                    timing.get("responseEnd", 0) - timing.get("requestStart", 0),
+                    0.0,
+                )
+        except Exception:
+            pass
 
         captured = CapturedResponse(
             url=url,
             status=pw_response.status,
             headers=dict(pw_response.headers),
             body=body_text,
-            timing_ms=max(timing_ms, 0.0),
+            timing_ms=timing_ms,
         )
         self.responses[url] = captured
 
@@ -228,19 +238,12 @@ class TrafficInterceptor:
     def detect_auth_scheme(self) -> dict[str, str]:
         """
         Analyze captured traffic to infer the authentication mechanism.
-
-        Returns:
-            {
-                "type": "bearer" | "cookie" | "api_key" | "basic" | "custom" | "none",
-                "token": "the actual value",
-                "header": "header name",
-                "cookie_name": "session cookie name (if cookie-based)",
-            }
+        Works for any auth scheme: Bearer, Basic, API key, cookie sessions.
         """
         result: dict[str, str] = {"type": "none"}
 
         for req in self.requests:
-            # Bearer / Basic auth
+            # Bearer / Basic auth (highest priority)
             auth_hdr = req.headers.get("authorization", "")
             if auth_hdr:
                 if auth_hdr.lower().startswith("bearer "):
@@ -254,27 +257,53 @@ class TrafficInterceptor:
                 if val:
                     return {"type": "api_key", "token": val, "header": hdr}
 
-            # Cookie-based sessions
+            # Cookie header in outgoing request
             cookie_hdr = req.headers.get("cookie", "")
-            if cookie_hdr:
-                session_names = [
-                    "phpsessid", "jsessionid", "sessionid", "session",
-                    "sid", "token", "auth", "connect.sid", "asp.net_sessionid",
-                ]
-                for pair in cookie_hdr.split(";"):
-                    pair = pair.strip()
-                    if "=" not in pair:
-                        continue
-                    name = pair.split("=", 1)[0].strip().lower()
-                    if any(sn in name for sn in session_names):
-                        val = pair.split("=", 1)[1].strip()
-                        result = {
-                            "type": "cookie",
-                            "token": val,
-                            "cookie_name": pair.split("=", 1)[0].strip(),
-                        }
+            if cookie_hdr and result["type"] == "none":
+                match = self._match_session_cookie(cookie_hdr)
+                if match:
+                    result = match
+
+        # Fallback: check response set-cookie headers for session cookie names
+        # This catches cases where the browser sends cookies but Playwright
+        # doesn't surface them in request.headers
+        if result["type"] == "none":
+            for resp in self.responses.values():
+                set_cookie = resp.headers.get("set-cookie", "")
+                if set_cookie:
+                    match = self._match_session_cookie(set_cookie)
+                    if match:
+                        result = match
+                        break
 
         return result
+
+    def _match_session_cookie(self, cookie_str: str) -> dict[str, str] | None:
+        """
+        Check a cookie string (from request Cookie header or response Set-Cookie)
+        for session-like cookie names.
+
+        Covers: PHP, Java, .NET, Express, Django, Rails, Flask, Laravel, Go, etc.
+        """
+        session_names = [
+            "phpsessid", "jsessionid", "sessionid", "session",
+            "sid", "token", "auth", "connect.sid", "asp.net_sessionid",
+            "_session", "sess", "laravel_session", "_gorilla_session",
+            "flask_session", "rack.session",
+        ]
+        for pair in cookie_str.split(";"):
+            pair = pair.strip()
+            if "=" not in pair:
+                continue
+            name = pair.split("=", 1)[0].strip().lower()
+            if any(sn in name for sn in session_names):
+                val = pair.split("=", 1)[1].strip()
+                return {
+                    "type": "cookie",
+                    "token": val,
+                    "cookie_name": pair.split("=", 1)[0].strip(),
+                }
+        return None
 
     # ── Statistics ───────────────────────────────────────────────────
 
