@@ -62,6 +62,7 @@ class TrafficInterceptor:
         self.requests: list[CapturedRequest] = []
         self.responses: dict[str, CapturedResponse] = {}  # keyed by URL
         self.websocket_messages: list[dict[str, Any]] = []
+        self.set_cookies_seen: list[str] = []
 
         self._request_callbacks: list[Callable[[CapturedRequest], None]] = []
         self._response_callbacks: list[Callable[[CapturedResponse], None]] = []
@@ -141,6 +142,11 @@ class TrafficInterceptor:
             timing_ms=timing_ms,
         )
         self.responses[url] = captured
+
+        # Store set-cookie headers for auth detection
+        set_cookie = captured.headers.get("set-cookie", "")
+        if set_cookie:
+            self.set_cookies_seen.append(set_cookie)
 
         for cb in self._response_callbacks:
             try:
@@ -268,13 +274,16 @@ class TrafficInterceptor:
         # This catches cases where the browser sends cookies but Playwright
         # doesn't surface them in request.headers
         if result["type"] == "none":
-            for resp in self.responses.values():
-                set_cookie = resp.headers.get("set-cookie", "")
-                if set_cookie:
-                    match = self._match_session_cookie(set_cookie)
+            for sc in self.set_cookies_seen:
+                for line in sc.replace("\n", ";").split(";"):
+                    if not line.strip():
+                        continue
+                    match = self._match_session_cookie(line.strip() + ";")
                     if match:
                         result = match
                         break
+                if result["type"] != "none":
+                    break
 
         return result
 

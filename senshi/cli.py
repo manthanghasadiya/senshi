@@ -818,7 +818,7 @@ async def _recon_async(
 
         # ── 5. Interactive crawl ─────────────────────────────────────
         task = progress.add_task("Discovering endpoints via interaction...", total=None)
-        interactor = AppInteractor(page, interceptor, target_domain)
+        interactor = AppInteractor(page, interceptor, target_domain, target_url=target)
 
         # BFS crawl handles: link following, form submission, SPA clicks per-page
         crawl_stats = await interactor.crawl_spa(max_pages=max_pages)

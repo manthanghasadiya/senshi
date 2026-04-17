@@ -44,15 +44,23 @@ class AppInteractor:
         await interactor.fill_and_submit_forms()
     """
 
+    _SKIP_PATH_PATTERNS = [
+        "logout", "signout", "sign-out", "log-out",
+        "delete-account", "deactivate",
+        "/manual", "/docs/api", "/swagger-ui",
+    ]
+
     def __init__(
         self,
         page: Any,
         interceptor: Any,
         target_domain: str,
+        target_url: str = "",
     ) -> None:
         self.page = page
         self.interceptor = interceptor
         self.target_domain = target_domain
+        self.target_path_prefix = urlparse(target_url).path.rstrip("/") if target_url else ""
 
         self.visited_urls: set[str] = set()
         self.clicked_selectors: set[str] = set()
@@ -174,8 +182,25 @@ class AppInteractor:
                 return [...new Set(links)];
             }
         """)
-        # Further filter to target domain
-        return [u for u in raw if self.target_domain in urlparse(u).netloc.lower()]
+        
+        filtered_links = []
+        for u in raw:
+            if self.target_domain not in urlparse(u).netloc.lower():
+                continue
+            path = urlparse(u).path.lower()
+            
+            # Skip destructive/useless endpoints
+            if any(pattern in path for pattern in self._SKIP_PATH_PATTERNS):
+                logger.debug("Skipping destructive/useless URL: %s", u)
+                continue
+            
+            # Scope check: URL must be under target path prefix
+            if self.target_path_prefix and not path.startswith(self.target_path_prefix.lower()):
+                continue
+                
+            filtered_links.append(u)
+            
+        return filtered_links
 
     async def _click_spa_elements(self) -> list[str]:
         """
@@ -395,8 +420,24 @@ class AppInteractor:
         After each submission, navigates back if the page changed.
         """
         forms = await self._get_forms()
-        submitted = 0
         current_url = self.page.url  # Remember where we are
+
+        if not forms:
+            # Debug: check if the page has any form elements at all
+            form_count = await self.page.evaluate("document.querySelectorAll('form').length")
+            input_count = await self.page.evaluate("document.querySelectorAll('input').length")
+            if form_count > 0 or input_count > 0:
+                logger.debug(
+                    "Page has %d <form> and %d <input> elements but _get_forms returned 0 — "
+                    "fields may lack name/id attributes. URL: %s",
+                    form_count, input_count, current_url,
+                )
+            else:
+                logger.debug("No forms or inputs found on %s", current_url)
+        else:
+            logger.debug("Found %d forms on %s", len(forms), current_url)
+
+        submitted = 0
 
         for form in forms:
             form_key = f"{form.get('action', '')}:{','.join(f.get('name', '') for f in form.get('fields', []))}"
@@ -454,7 +495,8 @@ class AppInteractor:
                 // Non-form input groups (React/Angular/Vue style)
                 // Look for input elements NOT inside a <form>
                 const orphanInputs = [];
-                document.querySelectorAll('input:not(form input), textarea:not(form textarea)').forEach(inp => {
+                document.querySelectorAll('input, textarea').forEach(inp => {
+                    if (inp.closest('form')) return;  // Already handled above
                     const name = inp.name || inp.id || '';
                     if (!name) return;
                     orphanInputs.push({
@@ -462,7 +504,11 @@ class AppInteractor:
                         type: inp.type || 'text',
                         value: inp.value || '',
                         required: inp.required,
-                        selector: inp.id ? '#' + CSS.escape(inp.id) : `[name="${CSS.escape(name)}"]`,
+                        selector: inp.id
+                            ? '#' + CSS.escape(inp.id)
+                            : inp.name
+                                ? '[name="' + CSS.escape(inp.name) + '"]'
+                                : null,
                     });
                 });
                 if (orphanInputs.length > 0) {
