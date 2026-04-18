@@ -85,9 +85,30 @@ class AppInteractor:
         start_count = len(self.interceptor.requests)
 
         # BFS queue: (url, depth)
-        queue: list[tuple[str, int]] = [(self.page.url, 0)]
+        queue_start_url = self.page.url
+        queue: list[tuple[str, int]] = [(queue_start_url, 0)]
+        spa_expanded = False
 
-        while queue and len(self.visited_urls) < max_pages:
+        while (queue or not spa_expanded) and len(self.visited_urls) < max_pages:
+            if not queue and not spa_expanded:
+                spa_expanded = True
+                if len(self.visited_urls) < 5:
+                    logger.debug("Few pages found via BFS - running deeper SPA click exploration")
+                    try:
+                        await self.page.goto(queue_start_url, wait_until="domcontentloaded", timeout=10_000)
+                        await self._wait_for_stable(timeout_ms=3_000)
+                    except Exception:
+                        pass
+                    new_urls = await self._click_spa_elements(max_clicks=100)
+                    for new_url in new_urls:
+                        new_norm = self._normalize_url(new_url)
+                        if new_norm not in self.visited_urls:
+                            queue.append((new_url, 1))
+                continue
+            
+            if not queue:
+                break
+                
             url, depth = queue.pop(0)
             if depth > max_depth:
                 continue
@@ -103,6 +124,18 @@ class AppInteractor:
                 await self._wait_for_stable(timeout_ms=3_000)
             except Exception as exc:
                 logger.debug("Navigation failed for %s: %s", url, exc)
+                continue
+
+            # CHECK: did we land on a different domain after redirect?
+            actual_url = self.page.url
+            actual_domain = urlparse(actual_url).netloc.lower()
+            if self.target_domain not in actual_domain:
+                logger.debug("Redirect escaped target domain: %s -> %s (skipping)", url, actual_url)
+                # Navigate back to a safe page
+                try:
+                    await self.page.go_back(wait_until="domcontentloaded", timeout=5_000)
+                except Exception:
+                    pass
                 continue
 
             logger.debug("Crawling page [depth=%d]: %s", depth, url)
@@ -159,7 +192,13 @@ class AppInteractor:
                     '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
                     '.mp4', '.mp3', '.avi', '.mov', '.wmv',
                     '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp',
-                    '.css', '.js', '.map', '.woff', '.woff2', '.ttf', '.eot'
+                    '.css', '.js', '.map', '.woff', '.woff2', '.ttf', '.eot',
+                    '.md', '.txt', '.rst', '.log',
+                    '.yml', '.yaml', '.toml', '.ini', '.cfg',
+                    '.xml', '.json',
+                    '.csv', '.tsv',
+                    '.bak', '.old', '.orig', '.swp',
+                    '.dist', '.example', '.sample'
                 ]);
                 const skip_protocols = ['javascript:', 'mailto:', 'tel:', 'data:', 'blob:'];
 
@@ -176,7 +215,20 @@ class AppInteractor:
                         const ext = url.pathname.split('.').pop()?.toLowerCase();
                         if (ext && skip_extensions.has('.' + ext)) return;
 
-                        links.push(url.href.split('#')[0]);  // Strip fragment
+                        let hrefVal = url.href;
+                        const hashIdx = hrefVal.indexOf('#');
+                        if (hashIdx !== -1) {
+                            const fragment = hrefVal.substring(hashIdx + 1);
+                            if (fragment.startsWith('/')) {
+                                // Hash route - keep it, but strip any plain anchor after the route
+                                links.push(hrefVal);
+                            } else {
+                                // Plain anchor - strip it
+                                links.push(hrefVal.substring(0, hashIdx));
+                            }
+                        } else {
+                            links.push(hrefVal);
+                        }
                     } catch(e) {}
                 });
                 return [...new Set(links)];
@@ -204,7 +256,7 @@ class AppInteractor:
             
         return filtered_links
 
-    async def _click_spa_elements(self) -> list[str]:
+    async def _click_spa_elements(self, max_clicks: int = 200) -> list[str]:
         """
         Click interactive elements that don't have meaningful href attributes.
         These are SPA route triggers: buttons, tabs, Angular (click) handlers, etc.
@@ -224,7 +276,7 @@ class AppInteractor:
         ]
 
         for el in spa_elements:
-            if len(self.clicked_selectors) > 200:  # Safety cap per page
+            if len(self.clicked_selectors) > max_clicks:  # Safety cap per page
                 break
             result = await self.click_and_observe(el)
             if result.get("url_changed") and result.get("new_url"):
@@ -243,18 +295,34 @@ class AppInteractor:
 
     def _normalize_url(self, url: str) -> str:
         """
-        Normalize URL for dedup. Strips fragment, query string, trailing slash,
-        and common index page filenames.
-
-        This is NOT target-specific — every web server has index pages.
+        Normalize URL for dedup.
+        
+        Preserves hash-based SPA routes (#/login, #/search) because they're
+        different views. Strips plain anchors (#section, #top) because they're
+        same-page jumps.
         """
-        url = url.split("#")[0].split("?")[0].rstrip("/")
-        # Normalize common index pages (standard web server behavior, not app-specific)
+        parsed = urlparse(url)
+        fragment = parsed.fragment
+        
+        # Check if fragment is a hash route (starts with /)
+        has_hash_route = fragment.startswith("/") if fragment else False
+        
+        # Strip query string for dedup (we care about the route, not query params)
+        base = f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/")
+        
+        # Normalize common index pages
         for suffix in ("/index.php", "/index.html", "/index.htm", "/index.jsp",
                         "/index.asp", "/index.aspx", "/default.asp", "/default.aspx"):
-            if url.lower().endswith(suffix):
-                url = url[:len(url) - len(suffix)]
-        return url.rstrip("/") or url
+            if base.lower().endswith(suffix):
+                base = base[:len(base) - len(suffix)]
+        
+        base = base.rstrip("/") or base
+        
+        # Append hash route if present
+        if has_hash_route:
+            base = f"{base}#/{fragment.lstrip('/')}"
+        
+        return base
 
     async def discover_interactive_elements(self) -> list[ElementInfo]:
         """
@@ -529,6 +597,8 @@ class AppInteractor:
 
     async def _submit_form(self, form: dict, strategy: str) -> None:
         """Fill and submit a single form."""
+        FILL_TIMEOUT = 3_000  # 3 seconds max per field - recon, not exploitation
+
         for field_info in form.get("fields", []):
             selector = field_info.get("selector", "")
             if not selector:
@@ -537,7 +607,6 @@ class AppInteractor:
             field_type = field_info.get("type", "text").lower()
             name = field_info.get("name", "")
 
-            # Skip hidden, submit, checkbox, radio in smart mode
             if field_type in ("hidden", "submit", "button"):
                 continue
 
@@ -545,25 +614,32 @@ class AppInteractor:
             if not el:
                 continue
 
-            if strategy == "empty":
-                continue  # Leave all fields empty
+            # Skip invisible elements immediately instead of waiting
+            try:
+                if not await el.is_visible():
+                    logger.debug("Skipping invisible field: %s", name)
+                    continue
+            except Exception:
+                continue
 
-            # Smart fill based on field type and name
+            if strategy == "empty":
+                continue
+
             value = self._smart_value(field_type, name)
 
             try:
                 if field_type in ("checkbox", "radio"):
-                    await el.check()
+                    await el.check(timeout=FILL_TIMEOUT)
                 elif field_type == "select":
                     options = await el.evaluate("s => Array.from(s.options).map(o => o.value)")
                     if options:
-                        await el.select_option(options[0] if len(options) == 1 else options[1])
+                        await el.select_option(options[0] if len(options) == 1 else options[1], timeout=FILL_TIMEOUT)
                 elif field_type == "file":
-                    pass  # Skip file uploads in recon phase
+                    pass  # Skip file uploads in recon
                 else:
-                    await el.fill(value)
+                    await el.fill(value, timeout=FILL_TIMEOUT)
             except Exception as exc:
-                logger.debug("Could not fill %s: %s", name, exc)
+                logger.debug("Could not fill %s: %s", name, str(exc).split('\n')[0])  # Only first line
 
         # Submit: click the submit button or press Enter
         submit_btn = await self.page.query_selector(
