@@ -99,6 +99,19 @@ class AppInteractor:
                         await self._wait_for_stable(timeout_ms=3_000)
                     except Exception:
                         pass
+                    # MUST expand navigation again before clicking
+                    await self.expand_navigation()
+                    await self.page.wait_for_timeout(1_000)  # Wait for lazy content
+
+                    # Re-collect hrefs from expanded nav
+                    hrefs = await self._collect_hrefs()
+                    logger.debug("SPA fallback: collected %d hrefs after nav expansion", len(hrefs))
+                    for href in hrefs:
+                        href_norm = self._normalize_url(href)
+                        if href_norm not in self.visited_urls:
+                            queue.append((href, 1))
+
+                    # Click pass with higher cap
                     new_urls = await self._click_spa_elements(max_clicks=100)
                     for new_url in new_urls:
                         new_norm = self._normalize_url(new_url)
@@ -142,9 +155,11 @@ class AppInteractor:
 
             # Expand hidden navigation (hamburger menus, dropdowns, accordions)
             await self.expand_navigation()
+            await self.page.wait_for_timeout(1_000)  # Wait for lazy-rendered content after nav expansion
 
             # Pass 1: Collect all <a href> links from this page
             hrefs = await self._collect_hrefs()
+            logger.debug("Collected %d hrefs from %s (after nav expansion)", len(hrefs), url)
             for href in hrefs:
                 href_norm = self._normalize_url(href)
                 if href_norm not in self.visited_urls:
@@ -205,7 +220,9 @@ class AppInteractor:
                 document.querySelectorAll('a[href]').forEach(a => {
                     try {
                         const href = a.getAttribute('href');
-                        if (!href || href === '#' || href.startsWith('#')) return;
+                        if (!href || href === '#') return;
+                        // Allow hash routes (#/login) but skip plain anchors (#section)
+                        if (href.startsWith('#') && !href.startsWith('#/')) return;
                         if (skip_protocols.some(p => href.toLowerCase().startsWith(p))) return;
 
                         const url = new URL(href, document.baseURI);
@@ -662,59 +679,126 @@ class AppInteractor:
 
         await self._wait_for_stable(timeout_ms=3_000)
 
-    # ── Navigation Expansion ─────────────────────────────────────────
+    # -- Navigation Expansion -----------------------------------------------
 
     async def expand_navigation(self) -> None:
         """
-        Expand navigation menus, dropdowns, hamburger menus, and
-        accordions to reveal hidden links and buttons.
+        Expand ALL hidden navigation elements on the current page.
+
+        Strategy: Find and click anything that looks like a navigation trigger.
+        This covers hamburger menus, sidebars, dropdowns, account menus,
+        floating action buttons, and framework-specific navigation components
+        across Angular Material, React MUI, Vuetify, Chakra, Ant Design,
+        Bootstrap, Tailwind, and vanilla HTML.
         """
-        # Hamburger / mobile menu toggles
-        hamburger_selectors = [
-            "button.navbar-toggler",
-            ".hamburger", ".menu-toggle", ".nav-toggle",
-            "[aria-label='Menu']", "[aria-label='Toggle navigation']",
-            "button.burger", ".mobile-menu-button",
-        ]
-        for sel in hamburger_selectors:
+        # Phase 1: Click buttons with navigation-related aria-labels
+        # This is the most reliable generic approach -- all accessible UI
+        # frameworks use aria-label on icon buttons
+        nav_labels = await self.page.evaluate("""
+            () => {
+                const triggers = [];
+                const navKeywords = [
+                    'menu', 'nav', 'sidenav', 'sidebar', 'drawer',
+                    'hamburger', 'toggle', 'account', 'user', 'profile',
+                    'settings', 'more', 'options', 'expand',
+                ];
+
+                // Find all buttons/clickable elements with aria-label
+                document.querySelectorAll('button, [role="button"], a').forEach(el => {
+                    const label = (el.getAttribute('aria-label') || '').toLowerCase();
+                    const title = (el.getAttribute('title') || '').toLowerCase();
+                    const text = (el.textContent || '').trim().toLowerCase();
+
+                    // Check if aria-label, title, or text matches nav keywords
+                    const matchStr = label + ' ' + title + ' ' + text;
+                    if (navKeywords.some(kw => matchStr.includes(kw))) {
+                        // Build a selector for this element
+                        let selector = '';
+                        if (el.id) {
+                            selector = '#' + CSS.escape(el.id);
+                        } else if (el.getAttribute('aria-label')) {
+                            selector = '[aria-label="' + el.getAttribute('aria-label').replace(/"/g, '\\"') + '"]';
+                        } else if (el.getAttribute('data-testid')) {
+                            selector = '[data-testid="' + el.getAttribute('data-testid') + '"]';
+                        } else {
+                            // Fallback: tag + class
+                            const tag = el.tagName.toLowerCase();
+                            const cls = el.className && typeof el.className === 'string'
+                                ? '.' + el.className.trim().split(/\\s+/).slice(0, 2).map(c => CSS.escape(c)).join('.')
+                                : '';
+                            selector = tag + cls;
+                        }
+
+                        if (selector) {
+                            triggers.push({
+                                selector: selector,
+                                label: label || title || text.substring(0, 30),
+                            });
+                        }
+                    }
+                });
+
+                // Also find common icon-only buttons (hamburger icons)
+                // These often have no aria-label but contain SVG or mat-icon with "menu"
+                document.querySelectorAll('button, [role="button"]').forEach(el => {
+                    const inner = el.innerHTML.toLowerCase();
+                    if (inner.includes('menu') || inner.includes('\u2630') ||
+                        inner.includes('bars') || inner.includes('hamburger')) {
+                        let selector = '';
+                        if (el.id) {
+                            selector = '#' + CSS.escape(el.id);
+                        } else if (el.getAttribute('aria-label')) {
+                            selector = '[aria-label="' + el.getAttribute('aria-label').replace(/"/g, '\\"') + '"]';
+                        }
+                        if (selector) {
+                            triggers.push({ selector: selector, label: 'icon-menu' });
+                        }
+                    }
+                });
+
+                return triggers;
+            }
+        """)
+
+        # Click each nav trigger and wait for drawer/menu to appear
+        clicked_triggers: set[str] = set()
+        for trigger in nav_labels:
+            sel = trigger.get("selector", "")
+            if not sel or sel in clicked_triggers:
+                continue
+            clicked_triggers.add(sel)
+
             try:
                 el = await self.page.query_selector(sel)
                 if el and await el.is_visible():
-                    await el.click(timeout=1_000)
-                    await self.page.wait_for_timeout(500)
+                    await el.click(timeout=2_000)
+                    await self.page.wait_for_timeout(800)  # Wait for animation
+                    logger.debug("Expanded nav trigger: %s (%s)", sel, trigger.get("label", ""))
             except Exception:
                 pass
 
-        # Dropdowns
-        dropdown_selectors = [
-            ".dropdown-toggle", "[data-toggle='dropdown']",
-            "[data-bs-toggle='dropdown']", ".dropdown > a",
-        ]
-        for sel in dropdown_selectors:
-            elements = await self.page.query_selector_all(sel)
-            for el in elements[:10]:  # Cap at 10 to avoid runaway clicks
-                try:
-                    if await el.is_visible():
-                        await el.click(timeout=1_000)
-                        await self.page.wait_for_timeout(300)
-                except Exception:
-                    pass
-
-        # Accordions / expandable sections
-        accordion_selectors = [
-            ".accordion-button", "[data-toggle='collapse']",
-            "[data-bs-toggle='collapse']", ".expandable",
+        # Phase 2: Also try legacy selectors as fallback
+        legacy_selectors = [
+            # Bootstrap
+            "button.navbar-toggler", "[data-toggle='dropdown']", "[data-bs-toggle='dropdown']",
+            # Generic
+            ".hamburger", ".menu-toggle", ".nav-toggle",
+            "[aria-label='Toggle navigation']",
+            # Dropdowns
+            ".dropdown-toggle", ".dropdown > a",
+            # Accordions
+            ".accordion-button", "[data-toggle='collapse']", "[data-bs-toggle='collapse']",
             "details > summary",
         ]
-        for sel in accordion_selectors:
-            elements = await self.page.query_selector_all(sel)
-            for el in elements[:10]:
-                try:
+        for sel in legacy_selectors:
+            try:
+                elements = await self.page.query_selector_all(sel)
+                for el in elements[:5]:
                     if await el.is_visible():
                         await el.click(timeout=1_000)
                         await self.page.wait_for_timeout(300)
-                except Exception:
-                    pass
+            except Exception:
+                pass
 
     async def scroll_for_lazy_content(self, max_scrolls: int = 10) -> int:
         """
