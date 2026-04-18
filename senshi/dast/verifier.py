@@ -119,39 +119,30 @@ class ResponseVerifier:
         payload: str,
         baseline_body: Optional[str] = None,
     ) -> VerificationResult:
-        """Verify SQL injection via error messages, data extraction, or boolean diff."""
+        """Verify SQL injection via actual SQL error messages.
+
+        Rules:
+        - Error-based: ONLY match real SQL error strings from SQLI_ERROR.
+          The error string must NOT already appear in the baseline.
+        - SQLI_STRONG_DATA is NOT used here — patterns like admin.*password
+          match normal page content and produce massive false positives.
+        - Boolean-based length diffs are NOT sufficient on their own.
+        """
         body_lower = response_body.lower()
+        baseline_lower = baseline_body.lower() if baseline_body else ""
 
-        # Error-based
+        # Error-based: actual SQL error strings, not in baseline
         for pattern in self.SQLI_ERROR:
-            if re.search(pattern, body_lower):
+            match = re.search(pattern, body_lower)
+            if match:
+                # CRITICAL: error must NOT be in baseline
+                if baseline_body and re.search(pattern, baseline_lower):
+                    continue  # This error is always present — not from our payload
                 return VerificationResult(
                     verified=True,
-                    confidence=0.80,
+                    confidence=0.85,
                     evidence_type="error",
-                    evidence_detail=f"DB error matched: {pattern}",
-                )
-
-        # Strong data extraction
-        for pattern in self.SQLI_STRONG_DATA:
-            if re.search(pattern, response_body, re.IGNORECASE):
-                return VerificationResult(
-                    verified=True,
-                    confidence=0.90,
-                    evidence_type="response_pattern",
-                    evidence_detail=f"Data extraction evidence: {pattern}",
-                )
-
-        # Boolean-based (requires baseline)
-        if baseline_body:
-            diff = abs(len(response_body) - len(baseline_body))
-            qualifiers = ["OR 1=1", "1'='1", "OR '1'='1", "AND 1=1"]
-            if diff > 200 and any(q.lower() in payload.lower() for q in qualifiers):
-                return VerificationResult(
-                    verified=True,
-                    confidence=0.65,
-                    evidence_type="boolean",
-                    evidence_detail=f"Response length differs by {diff} bytes with boolean payload",
+                    evidence_detail=f"DB error matched: {match.group(0)[:80]}",
                 )
 
         return VerificationResult(
