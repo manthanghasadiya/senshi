@@ -83,7 +83,7 @@ class ResponseVerifier:
 
     # ── Public verify methods ─────────────────────────────────────────────────
 
-    def verify_cmdi(self, response_body: str, payload: str) -> VerificationResult:
+    def verify_cmdi(self, response_body: str, payload: str, **kwargs) -> VerificationResult:
         """Verify command injection by requiring actual shell output."""
         for pattern in self.CMDI_STRONG:
             match = re.search(pattern, response_body, re.IGNORECASE)
@@ -157,6 +157,7 @@ class ResponseVerifier:
         response_body: str,
         payload: str,
         executed_in_browser: bool = False,
+        **kwargs,
     ) -> VerificationResult:
         """Verify XSS via browser execution confirmation or unencoded reflection."""
         if executed_in_browser:
@@ -196,7 +197,7 @@ class ResponseVerifier:
             evidence_detail="Payload not found or was HTML-encoded in response",
         )
 
-    def verify_lfi(self, response_body: str, payload: str) -> VerificationResult:
+    def verify_lfi(self, response_body: str, payload: str, **kwargs) -> VerificationResult:
         """Verify LFI/path traversal by requiring recognizable file content."""
         for pattern in self.LFI_STRONG:
             match = re.search(pattern, response_body, re.IGNORECASE)
@@ -214,7 +215,7 @@ class ResponseVerifier:
             evidence_detail="No recognizable file content found in response",
         )
 
-    def verify_ssrf(self, response_body: str, payload: str) -> VerificationResult:
+    def verify_ssrf(self, response_body: str, payload: str, **kwargs) -> VerificationResult:
         """Verify SSRF by checking for internal service response artifacts."""
         for pattern in self.SSRF_STRONG:
             match = re.search(pattern, response_body, re.IGNORECASE)
