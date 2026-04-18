@@ -2,6 +2,8 @@
 Senshi CLI — main entry point.
 
 senshi pentest <url> [options]       # Autonomous pentesting agent (v0.5.0)
+senshi scan <url> [options]          # Phase 2: exploit scan (v1.0.0)
+senshi scan --from-recon <file>      # Exploit from existing recon
 senshi dast <url> [options]          # Scan live web endpoints
 senshi sast <path|url> [options]     # Analyze source code
 senshi recon <url> [options]         # Recon only (discover endpoints)
@@ -23,7 +25,7 @@ from senshi.utils.logger import console, print_banner, print_success, print_erro
 
 app = typer.Typer(
     name="senshi",
-    help="Senshi (戦士) — AI-Powered Security Scanner for Bug Bounty Hunters",
+    help="Senshi - AI-Powered Security Scanner for Bug Bounty Hunters",
     add_completion=False,
     rich_markup_mode="rich",
 )
@@ -42,7 +44,7 @@ def main(
         help="Show version and exit.",
     ),
 ) -> None:
-    """Senshi (戦士) — AI-Powered Security Scanner."""
+    """Senshi - AI-Powered Security Scanner."""
     pass
 
 
@@ -181,12 +183,12 @@ def pentest(
     budget: int = typer.Option(0, help="Max LLM calls (0 = unlimited)"),
     har: str = typer.Option("", help="Export HTTP traffic to HAR file"),
     cookie: str = typer.Option(None, "--cookie", "-c", help="Session cookie (e.g., 'PHPSESSID=abc123; security=low')"),
-    fast: bool = typer.Option(False, "--fast", help="Fast mode — fewer LLM calls, more aggressive batching"),
+    fast: bool = typer.Option(False, "--fast", help="Fast mode - fewer LLM calls, more aggressive batching"),
     login_url: str = typer.Option("", help="Login page URL for auto-auth"),
     username: str = typer.Option("", "-u", help="Username for auto-auth"),
     password: str = typer.Option("", "-p", help="Password for auto-auth"),
 ) -> None:
-    """Run autonomous pentest agent — Think → Act → Observe loop."""
+    """Run autonomous pentest agent - Think -> Act -> Observe loop."""
     import asyncio
     from senshi.core.config import SenshiConfig
     from senshi.core.session import Session
@@ -675,7 +677,7 @@ def config_cmd(
     console.print(f"  [dim]Config file: {config.CONFIG_DIR / 'config.json'}[/dim]" if hasattr(config, 'CONFIG_DIR') else "")
 
 
-# ── Phase 1: Browser-Instrumented Recon ─────────────────────
+# -- Phase 1: Browser-Instrumented Recon ---------------------
 
 @app.command()
 def recon(
@@ -868,6 +870,262 @@ async def _recon_async(
     _print_recon_summary(attack_surface)
     console.print(f"\n  [green]Attack surface saved to: {output}[/green]")
     console.print(f"  [dim]Load later with: AttackSurface.load(\"{output}\")[/dim]\n")
+
+
+# -- Phase 2: Exploit Scan ------------------------------------------------
+
+@app.command()
+def scan(
+    target: str = typer.Argument("", help="Target URL (runs recon first, then exploit)"),
+    from_recon: str = typer.Option("", "--from-recon", help="Path to attack_surface.json (skip recon)"),
+    output: str = typer.Option("scan_results.json", "-o", "--output", help="Output file path"),
+    agents: str = typer.Option("", "--agents", help="Comma-separated agents to run (sqli,xss,cmdi,...)"),
+    skip_agents: str = typer.Option("", "--skip-agents", help="Comma-separated agents to skip"),
+    no_ai: bool = typer.Option(False, "--no-ai", help="Seed payloads only (no LLM)"),
+    aggressive: bool = typer.Option(False, "--aggressive", help="Enable Layer 3 LLM escalation"),
+    browser_verify: bool = typer.Option(False, "--browser-verify", help="Verify XSS in real browser"),
+    rate_limit: float = typer.Option(0.0, "--rate-limit", help="Seconds between requests (0 = fast)"),
+    timeout: float = typer.Option(10.0, "--timeout", help="HTTP request timeout"),
+    proxy: str = typer.Option("", "--proxy", help="Proxy URL (e.g. http://127.0.0.1:8080 for Burp)"),
+    cookie: str = typer.Option("", "--cookie", "-c", help="Session cookies ('key=val; key2=val2')"),
+    extra_cookies: str = typer.Option("", "--extra-cookies", help="Additional cookies ('key=val; key2=val2')"),
+    login_url: str = typer.Option("", help="Login page URL for auto-auth"),
+    username: str = typer.Option("", "-u", help="Username for auto-auth"),
+    password: str = typer.Option("", "-p", help="Password for auto-auth"),
+    provider: str = typer.Option("", help="LLM provider (deepseek|openai|groq|ollama)"),
+    model: str = typer.Option("", help="Specific LLM model name"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """
+    Run exploit scan against discovered attack surface.
+
+    Supports two modes:
+      1. Full pipeline: senshi scan http://target.com (runs recon then exploit)
+      2. From recon:    senshi scan --from-recon attack_surface.json
+
+    8 exploit agents: SQLi, XSS, CMDi, PathTraversal, SSRF, SSTI, IDOR, OpenRedirect.
+    Layered payload architecture: seed payloads + LLM-adaptive generation.
+    NO EXPLOIT = NO REPORT.
+
+    Examples:
+        senshi scan http://dvwa.local --login-url http://dvwa.local/login.php -u admin -p password --extra-cookies "security=low"
+        senshi scan --from-recon attack_surface.json --cookie "PHPSESSID=abc; security=low"
+        senshi scan http://target.com --agents sqli,xss,cmdi --no-ai
+        senshi scan http://target.com --proxy http://127.0.0.1:8080
+    """
+    from senshi.utils.logger import setup_global_logging
+
+    print_banner()
+    setup_global_logging(verbose)
+
+    if not target and not from_recon:
+        print_error("Provide a target URL or --from-recon path")
+        raise typer.Exit(1)
+
+    # -- Load or build attack surface --
+    if from_recon:
+        console.print(f"\n  Loading attack surface from: [cyan]{from_recon}[/cyan]")
+        from senshi.models.attack_surface import AttackSurface
+        try:
+            surface = AttackSurface.load(from_recon)
+        except Exception as exc:
+            print_error(f"Failed to load attack surface: {exc}")
+            raise typer.Exit(1)
+        console.print(f"  [green][OK][/green] {surface.summary()}")
+        console.print()
+    else:
+        # Run recon first, then exploit
+        import asyncio
+        console.print("\n  [bold cyan]Phase 1: Reconnaissance[/bold cyan]\n")
+
+        # Write recon to a temp file
+        recon_output = "attack_surface.json"
+        asyncio.run(_recon_async(
+            target=target,
+            output=recon_output,
+            headless=True,
+            max_pages=50,
+            timeout=60,
+            export_har=False,
+            proxy=proxy,
+            cookie=cookie,
+            extra_cookies=extra_cookies,
+            login_url=login_url,
+            username=username,
+            password=password,
+            verbose=verbose,
+        ))
+
+        from senshi.models.attack_surface import AttackSurface
+        try:
+            surface = AttackSurface.load(recon_output)
+        except Exception as exc:
+            print_error(f"Recon failed: {exc}")
+            raise typer.Exit(1)
+
+    # -- Build session --
+    from senshi.core.session import Session
+    from senshi.utils.http import parse_cookies
+
+    base_url = surface.target_url or target or ""
+    session_cookies: dict[str, str] = {}
+
+    # Auth
+    if login_url and username and password:
+        console.print("  Authenticating...")
+        try:
+            import httpx
+            from senshi.auth.manager import AuthManager
+            auth_mgr = AuthManager(login_url, username, password)
+            with httpx.Client(follow_redirects=True, timeout=30) as client:
+                session_cookie_str = auth_mgr.login_sync(client)
+            if session_cookie_str:
+                session_cookies.update(parse_cookies(session_cookie_str))
+                console.print("  [green][OK][/green] Authenticated")
+            else:
+                console.print("  [yellow]! Auth failed -- continuing unauthenticated[/yellow]")
+        except Exception as exc:
+            console.print(f"  [yellow]! Auth error: {exc}[/yellow]")
+
+    if cookie:
+        session_cookies.update(parse_cookies(cookie))
+    if extra_cookies:
+        session_cookies.update(parse_cookies(extra_cookies))
+
+    session = Session(
+        base_url=base_url,
+        proxy=proxy,
+        rate_limit=rate_limit,
+        cookies=session_cookies if session_cookies else None,
+        timeout=timeout,
+    )
+
+    # -- Brain (LLM) --
+    brain = None
+    if not no_ai:
+        try:
+            from senshi.ai.brain import Brain
+            from senshi.core.config import SenshiConfig
+            config = SenshiConfig.load()
+            if provider:
+                config.provider = provider
+            if model:
+                config.model = model
+            brain = Brain(config=config)
+            console.print(f"  [dim]AI: {brain.provider}/{brain.model}[/dim]")
+        except Exception:
+            console.print("  [yellow]! No AI provider configured. Using seed payloads only.[/yellow]")
+            console.print("  [dim]Run 'senshi setup' to configure an LLM for adaptive payload generation.[/dim]")
+
+    # -- Config --
+    from senshi.exploit.config import ExploitConfig
+    exploit_config = ExploitConfig(
+        output_path=output,
+        rate_limit=rate_limit,
+        timeout=timeout,
+        aggressive=aggressive,
+        browser_verify=browser_verify,
+        use_ai=not no_ai,
+        proxy=proxy,
+        skip_agents=[a.strip() for a in skip_agents.split(",") if a.strip()],
+        only_agents=[a.strip() for a in agents.split(",") if a.strip()],
+    )
+
+    # -- Run exploit engine --
+    from senshi.exploit.engine import ExploitEngine
+    from rich.table import Table as RichTable
+
+    engine = ExploitEngine(session=session, config=exploit_config, brain=brain)
+
+    console.print(f"\n  [bold cyan]Phase 2: Exploitation[/bold cyan]")
+    console.print(f"  Agents: {', '.join(a.name for a in engine.agents)}")
+    console.print(f"  Endpoints: {surface.total_endpoints} ({surface.injectable_params} injectable params)")
+    console.print()
+
+    def _print_event(event: str, **kwargs):
+        """Real-time output callback."""
+        if event == "agent_start":
+            agent = kwargs.get("agent", "")
+            ep = kwargs.get("endpoint")
+            params = kwargs.get("params", "")
+            if ep:
+                console.print(f"  [dim]{agent}[/dim] -> {ep.method} {ep.path} [dim](param: {params})[/dim]")
+        elif event == "finding":
+            f = kwargs.get("finding")
+            if f:
+                sev_color = {
+                    "critical": "red bold",
+                    "high": "red",
+                    "medium": "yellow",
+                    "low": "blue",
+                    "info": "dim",
+                }.get(f.severity.value, "white")
+                confirmed = " [green][CONFIRMED][/green]" if f.confirmed else ""
+                console.print(f"\n  [{sev_color}][{f.severity.value.upper()}][/{sev_color}] {f.title}{confirmed}")
+                console.print(f"    Endpoint: {f.endpoint}")
+                console.print(f"    Payload:  {f.payload[:80]}")
+                console.print(f"    Evidence: {f.evidence[:100]}")
+                if f.poc_curl:
+                    console.print(f"    PoC:      {f.poc_curl[:120]}")
+                console.print()
+
+    try:
+        findings = engine.run(surface, print_fn=_print_event)
+    except KeyboardInterrupt:
+        engine.state.interrupt()
+        console.print("\n  [yellow]Scan interrupted -- partial results saved[/yellow]")
+        findings = engine.state.findings
+    finally:
+        session.close()
+
+    # -- Summary --
+    summary = engine.get_summary(findings)
+    console.print(f"\n  [bold cyan]Scan Complete[/bold cyan]")
+
+    stats_table = RichTable(title="Scan Results", show_header=True)
+    stats_table.add_column("Metric", style="cyan", min_width=20)
+    stats_table.add_column("Value", style="green bold")
+
+    stats_table.add_row("Total Findings", str(summary["total_findings"]))
+    stats_table.add_row("Confirmed", str(summary["confirmed"]))
+
+    sev = summary["severity"]
+    sev_str = f"{sev['critical']} CRITICAL, {sev['high']} HIGH, {sev['medium']} MEDIUM, {sev['low']} LOW"
+    stats_table.add_row("By Severity", sev_str)
+    stats_table.add_row("Endpoints Tested", str(summary["endpoints_tested"]))
+    stats_table.add_row("Requests Sent", str(summary["requests_sent"]))
+
+    mins = int(summary["duration_seconds"]) // 60
+    secs = int(summary["duration_seconds"]) % 60
+    stats_table.add_row("Duration", f"{mins}m {secs}s")
+    stats_table.add_row("Report", output)
+
+    console.print(stats_table)
+
+    if findings:
+        console.print()
+        findings_table = RichTable(title="Findings", show_header=True)
+        findings_table.add_column("Sev", width=10)
+        findings_table.add_column("Title", min_width=30)
+        findings_table.add_column("Endpoint", min_width=25)
+        findings_table.add_column("Confirmed", width=10)
+
+        for f in sorted(findings, key=lambda x: x.severity.rank if hasattr(x.severity, 'rank') else 0, reverse=True):
+            sev_color = {
+                "critical": "red bold",
+                "high": "red",
+                "medium": "yellow",
+                "low": "blue",
+            }.get(f.severity.value, "white")
+            findings_table.add_row(
+                f"[{sev_color}]{f.severity.value.upper()}[/{sev_color}]",
+                f.title,
+                f"{f.method} {f.endpoint.split('/')[-1] if f.endpoint else ''}",
+                "[green]YES[/green]" if f.confirmed else "[dim]no[/dim]",
+            )
+        console.print(findings_table)
+
+    console.print(f"\n  [green]Results saved to: {output}[/green]\n")
 
 
 def _print_recon_summary(surface: "AttackSurface") -> None:
