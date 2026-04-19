@@ -1094,6 +1094,7 @@ def scan(
     stats_table.add_row("By Severity", sev_str)
     stats_table.add_row("Endpoints Tested", str(summary["endpoints_tested"]))
     stats_table.add_row("Requests Sent", str(summary["requests_sent"]))
+    stats_table.add_row("LLM Calls", str(summary.get("llm_calls", 0)))
 
     mins = int(summary["duration_seconds"]) // 60
     secs = int(summary["duration_seconds"]) % 60

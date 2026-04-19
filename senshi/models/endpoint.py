@@ -85,19 +85,24 @@ class Endpoint:
         """
         Return parameters worth testing for injection.
 
-        Excludes auth tokens, CSRF tokens, and other params that would
-        break the session if mutated.
+        Excludes auth tokens, CSRF tokens, submit buttons, and other params
+        that would break the session or waste time if mutated.
         """
         skip_names = {
             "csrf", "csrftoken", "_token", "authenticity_token",
             "csrfmiddlewaretoken", "__requestverificationtoken",
             "authorization", "x-api-key", "x-auth-token",
             "x-csrf-token", "x-xsrf-token",
+            # Skip submit buttons — nobody finds SQLi in a Submit param
+            "submit", "btn", "button",
         }
+        # Skip by sample value — catches Submit=Submit, Login=Login, etc.
+        skip_values = {"submit", "login", "go", "search", "send", "reset", "ok", "cancel"}
         return [
             p for p in self.parameters
             if p.name.lower() not in skip_names
             and p.location in (ParamLocation.QUERY, ParamLocation.BODY, ParamLocation.PATH)
+            and (not p.sample_value or p.sample_value.lower() not in skip_values)
         ]
 
     def dedup_key(self) -> str:
