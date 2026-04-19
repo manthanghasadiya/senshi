@@ -1,6 +1,6 @@
 [project]
 name = "senshi"
-version = "0.6.8"
+version = "1.0.0"
 description = "AI-powered SAST + DAST security scanner for bug bounty hunters"
 authors = [{ name = "Manthan Ghasadiya" }]
 license = { text = "MIT" }
@@ -35,6 +35,7 @@ dependencies = [
     "rich>=13.0.0",
     "beautifulsoup4>=4.12.0",
     "nest_asyncio>=1.5.0",
+    "playwright>=1.40.0",
 ]
 
 [project.optional-dependencies]

@@ -2,6 +2,8 @@
 Senshi CLI — main entry point.
 
 senshi pentest <url> [options]       # Autonomous pentesting agent (v0.5.0)
+senshi scan <url> [options]          # Phase 2: exploit scan (v1.0.0)
+senshi scan --from-recon <file>      # Exploit from existing recon
 senshi dast <url> [options]          # Scan live web endpoints
 senshi sast <path|url> [options]     # Analyze source code
 senshi recon <url> [options]         # Recon only (discover endpoints)
@@ -23,7 +25,7 @@ from senshi.utils.logger import console, print_banner, print_success, print_erro
 
 app = typer.Typer(
     name="senshi",
-    help="Senshi (戦士) — AI-Powered Security Scanner for Bug Bounty Hunters",
+    help="Senshi - AI-Powered Security Scanner for Bug Bounty Hunters",
     add_completion=False,
     rich_markup_mode="rich",
 )
@@ -42,7 +44,7 @@ def main(
         help="Show version and exit.",
     ),
 ) -> None:
-    """Senshi (戦士) — AI-Powered Security Scanner."""
+    """Senshi - AI-Powered Security Scanner."""
     pass
 
 
@@ -181,12 +183,12 @@ def pentest(
     budget: int = typer.Option(0, help="Max LLM calls (0 = unlimited)"),
     har: str = typer.Option("", help="Export HTTP traffic to HAR file"),
     cookie: str = typer.Option(None, "--cookie", "-c", help="Session cookie (e.g., 'PHPSESSID=abc123; security=low')"),
-    fast: bool = typer.Option(False, "--fast", help="Fast mode — fewer LLM calls, more aggressive batching"),
+    fast: bool = typer.Option(False, "--fast", help="Fast mode - fewer LLM calls, more aggressive batching"),
     login_url: str = typer.Option("", help="Login page URL for auto-auth"),
     username: str = typer.Option("", "-u", help="Username for auto-auth"),
     password: str = typer.Option("", "-p", help="Password for auto-auth"),
 ) -> None:
-    """Run autonomous pentest agent — Think → Act → Observe loop."""
+    """Run autonomous pentest agent - Think -> Act -> Observe loop."""
     import asyncio
     from senshi.core.config import SenshiConfig
     from senshi.core.session import Session
@@ -284,6 +286,77 @@ def pentest(
             target_profile=target_profile,
             output=output,
         )
+
+        if browser:
+            console.print("[cyan]Browser mode enabled - Playwright headless Chrome[/cyan]")
+            
+            from senshi.browser.engine import BrowserEngine, DOMXSSScanner
+            from senshi.browser.spa_crawler import SPACrawler
+            from urllib.parse import urlparse, parse_qs
+            from senshi.reporters.models import Finding, Severity, Confidence, ScanMode
+            from senshi.utils.logger import print_finding
+            
+            with BrowserEngine(headless=True) as engine:
+                if 'session_cookie' in locals() and session_cookie:
+                    from senshi.utils.http import parse_cookies
+                    cookies_dict = parse_cookies(session_cookie)
+                    cookies_list = [{"name": k, "value": v} for k, v in cookies_dict.items()]
+                    engine.set_cookies(cookies_list, urlparse(url).netloc)
+                elif config.cookies:
+                    cookies_list = [{"name": k, "value": v} for k, v in config.cookies.items()]
+                    engine.set_cookies(cookies_list, urlparse(url).netloc)
+                
+                spa_crawler = SPACrawler(engine)
+                try:
+                    spa_results = spa_crawler.crawl(url)
+                    
+                    api_endpoints = spa_results.get('api_endpoints', [])
+                    forms = spa_results.get('forms', [])
+                    pages = spa_results.get('pages', [])
+                    
+                    console.print(f"  Discovered {len(api_endpoints)} API endpoints")
+                    console.print(f"  Found {len(forms)} forms")
+                    
+                    xss_scanner = DOMXSSScanner(engine)
+                    
+                    for endpoint in pages:
+                        params = list(parse_qs(urlparse(endpoint).query).keys())
+                        for param in params:
+                            results = xss_scanner.scan_parameter(endpoint, param)
+                            for res in results:
+                                if res.vulnerable:
+                                    finding = Finding(
+                                        title=f"DOM XSS in {param}",
+                                        severity=Severity.CRITICAL,
+                                        confidence=Confidence.CONFIRMED,
+                                        category="xss",
+                                        mode=ScanMode.DAST,
+                                        endpoint=endpoint,
+                                        payload=res.payload,
+                                        description=res.execution_proof,
+                                        evidence=res.evidence.screenshot_path,
+                                        confirmed=True,
+                                    )
+                                    agent.context.add_finding(finding)
+                                    print_finding(finding.severity.value, finding.title, finding.endpoint)
+                    for form in forms:
+                        finding = xss_scanner.scan_context(engine.new_page(), endpoint, "form_input", form)
+                        if finding:
+                            agent.context.add_finding(finding)
+                            print_finding(finding.severity.value, finding.title, finding.endpoint)
+                except Exception as e:
+                    console.print(f"\n[bold red]✗ Browser engine failed to connect:[/bold red] {e}")
+                    if "ERR_CONNECTION_REFUSED" in str(e) or "ERR_NAME_NOT_RESOLVED" in str(e):
+                        console.print(f"  [yellow]Hint: Could not reach {url}. Double check if the IP Address or Domain is correct and running.[/yellow]")
+                    console.print("  [dim]Skipping browser-based discovery and falling back to standard recon mode...[/dim]")
+                    spa_results = {}
+                    api_endpoints = []
+                    forms = []
+                
+                console.print("\n[bold cyan]Phase 1:[/bold cyan] Autonomous Agent Started...")
+                found_eps = [{"url": ep["url"], "method": ep["method"]} for ep in api_endpoints]
+                found_eps.extend([{"url": f["action"], "method": f["method"]} for f in forms])
+                agent.context.add_endpoints(found_eps)
 
         result = asyncio.run(agent.run())
 
@@ -602,6 +675,501 @@ def config_cmd(
     config.save()
     print_success("Configuration saved!")
     console.print(f"  [dim]Config file: {config.CONFIG_DIR / 'config.json'}[/dim]" if hasattr(config, 'CONFIG_DIR') else "")
+
+
+# -- Phase 1: Browser-Instrumented Recon ---------------------
+
+@app.command()
+def recon(
+    target: str = typer.Argument(..., help="Target URL to scan"),
+    output: str = typer.Option("attack_surface.json", "--output", "-o", help="Output file path (.json)"),
+    headless: bool = typer.Option(True, "--headless/--no-headless", help="Run browser headlessly"),
+    max_pages: int = typer.Option(50, "--max-pages", help="Maximum pages to crawl"),
+    timeout: int = typer.Option(60, "--timeout", help="Navigation timeout in seconds"),
+    export_har: bool = typer.Option(False, "--har", help="Also export HAR file"),
+    proxy: str = typer.Option("", "--proxy", help="Proxy URL (e.g. http://127.0.0.1:8080)"),
+    cookie: str = typer.Option("", "--cookie", "-c", help="Session cookies ('key=val; key2=val2')"),
+    extra_cookies: str = typer.Option("", "--extra-cookies", help="Additional cookies to inject after login ('key=val; key2=val2')"),
+    login_url: str = typer.Option("", help="Login page URL for automated auth"),
+    username: str = typer.Option("", "-u", help="Username for auto-auth"),
+    password: str = typer.Option("", "-p", help="Password for auto-auth"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """
+    Discover all endpoints and parameters from a web application.
+
+    Launches a real browser, navigates to the target, interacts with the
+    UI (clicks, forms, scrolling), and captures all API traffic to build
+    a complete attack surface.
+
+    Works on traditional HTML apps, SPAs (React/Angular/Vue), REST APIs,
+    and GraphQL -- anything the browser can reach.
+
+    Examples:
+        senshi recon https://target.com
+        senshi recon https://target.com -o results.json --har
+        senshi recon https://target.com --no-headless         # watch the browser
+        senshi recon http://10.0.0.151/DVWA/ --login-url http://10.0.0.151/DVWA/login.php -u admin -p password
+    """
+    import asyncio
+    from senshi.utils.logger import setup_global_logging
+
+    print_banner()
+    setup_global_logging(verbose)
+    asyncio.run(_recon_async(
+        target=target,
+        output=output,
+        headless=headless,
+        max_pages=max_pages,
+        timeout=timeout,
+        export_har=export_har,
+        proxy=proxy,
+        cookie=cookie,
+        extra_cookies=extra_cookies,
+        login_url=login_url,
+        username=username,
+        password=password,
+        verbose=verbose,
+    ))
+
+
+async def _recon_async(
+    *,
+    target: str,
+    output: str,
+    headless: bool,
+    max_pages: int,
+    timeout: int,
+    export_har: bool,
+    proxy: str,
+    cookie: str,
+    extra_cookies: str,
+    login_url: str,
+    username: str,
+    password: str,
+    verbose: bool,
+) -> None:
+    """Async implementation of the recon command."""
+    from urllib.parse import urlparse
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    from senshi.browser.runtime import BrowserRuntime
+    from senshi.browser.interceptor import TrafficInterceptor
+    from senshi.browser.interactor import AppInteractor
+    from senshi.browser.analyzer import EndpointAnalyzer
+
+    target_domain = urlparse(target).netloc
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+
+        # ── 1. Launch browser ────────────────────────────────────────
+        task = progress.add_task("Launching headless Chromium...", total=None)
+        runtime = BrowserRuntime(headless=headless, timeout=timeout * 1000, proxy=proxy)
+        try:
+            await runtime.launch()
+        except Exception as exc:
+            print_error(f"Browser launch failed: {exc}")
+            print_error("Run: pip install playwright && playwright install chromium")
+            return
+        progress.update(task, description="[green]Browser launched[/green] ✓")
+
+        # ── 2. Authentication (if credentials provided) ──────────────
+        if login_url and username and password:
+            task = progress.add_task("Authenticating...", total=None)
+            try:
+                import httpx
+                from senshi.auth.manager import AuthManager
+
+                auth_mgr = AuthManager(login_url, username, password)
+                with httpx.Client(follow_redirects=True, timeout=30) as client:
+                    session_cookie = auth_mgr.login_sync(client)
+
+                if session_cookie:
+                    await runtime.set_cookies_from_string(session_cookie, target_domain)
+                    progress.update(task, description="[green]Authenticated[/green] ✓")
+                else:
+                    progress.update(task, description="[yellow]Auth failed -- continuing unauthenticated[/yellow]")
+            except Exception as exc:
+                progress.update(task, description=f"[yellow]Auth error: {exc}[/yellow]")
+
+        elif cookie:
+            await runtime.set_cookies_from_string(cookie, target_domain)
+
+        if extra_cookies:
+            await runtime.set_cookies_from_string(extra_cookies, target_domain)
+
+        # ── 3. Attach interceptor ────────────────────────────────────
+        task = progress.add_task("Attaching traffic interceptor...", total=None)
+        page = await runtime.get_page()
+        interceptor = TrafficInterceptor(target_domain)
+        await interceptor.attach(page)
+        progress.update(task, description="[green]Interceptor attached[/green] ✓")
+
+        # ── 4. Navigate to target ────────────────────────────────────
+        task = progress.add_task(f"Navigating to {target}...", total=None)
+        try:
+            await runtime.navigate(target, wait_strategy="smart")
+            progress.update(task, description="[green]Navigation complete[/green] ✓")
+        except Exception as exc:
+            print_error(f"Could not reach {target}: {exc}")
+            await runtime.close()
+            return
+
+        # ── 5. Interactive crawl ─────────────────────────────────────
+        task = progress.add_task("Discovering endpoints via interaction...", total=None)
+        interactor = AppInteractor(page, interceptor, target_domain, target_url=target)
+
+        # BFS crawl handles: link following, form submission, SPA clicks per-page
+        crawl_stats = await interactor.crawl_spa(max_pages=max_pages)
+
+        # Final scroll + JS triggers on last visited page
+        await interactor.scroll_for_lazy_content()
+        await interactor.trigger_javascript_actions()
+
+        stats = interceptor.get_stats()
+        progress.update(
+            task,
+            description=f"[green]Discovered {stats['unique_endpoints']} endpoints[/green] ✓",
+        )
+
+        # ── 6. Analyze traffic ───────────────────────────────────────
+        task = progress.add_task("Analyzing captured traffic...", total=None)
+        analyzer = EndpointAnalyzer(
+            requests=interceptor.get_all_endpoints(),
+            responses=interceptor.responses,
+        )
+        auth_scheme = interceptor.detect_auth_scheme()
+        if auth_scheme["type"] == "none":
+            if cookie or extra_cookies:
+                auth_scheme = {"type": "cookie", "cookie_name": "injected", "token": "[hidden]"}
+            elif 'session_cookie' in locals() and session_cookie:
+                auth_scheme = {"type": "cookie", "cookie_name": "injected", "token": "[hidden]"}
+
+        attack_surface = analyzer.build_attack_surface(
+            target_url=target,
+            auth_scheme=auth_scheme,
+        )
+        progress.update(task, description="[green]Analysis complete[/green] ✓")
+
+        # ── 7. Save results ──────────────────────────────────────────
+        attack_surface.save(output)
+
+        if export_har:
+            har_path = output.replace(".json", ".har")
+            interceptor.export_har(har_path)
+            console.print(f"  [dim]HAR exported to: {har_path}[/dim]")
+
+        # ── 8. Close browser ─────────────────────────────────────────
+        await runtime.close()
+
+    # ── Print summary ────────────────────────────────────────────────
+    console.print()
+    _print_recon_summary(attack_surface)
+    console.print(f"\n  [green]Attack surface saved to: {output}[/green]")
+    console.print(f"  [dim]Load later with: AttackSurface.load(\"{output}\")[/dim]\n")
+
+
+# -- Phase 2: Exploit Scan ------------------------------------------------
+
+@app.command()
+def scan(
+    target: str = typer.Argument("", help="Target URL (runs recon first, then exploit)"),
+    from_recon: str = typer.Option("", "--from-recon", help="Path to attack_surface.json (skip recon)"),
+    output: str = typer.Option("scan_results.json", "-o", "--output", help="Output file path"),
+    agents: str = typer.Option("", "--agents", help="Comma-separated agents to run (sqli,xss,cmdi,...)"),
+    skip_agents: str = typer.Option("", "--skip-agents", help="Comma-separated agents to skip"),
+    no_ai: bool = typer.Option(False, "--no-ai", help="Seed payloads only (no LLM)"),
+    aggressive: bool = typer.Option(False, "--aggressive", help="Enable Layer 3 LLM escalation"),
+    browser_verify: bool = typer.Option(False, "--browser-verify", help="Verify XSS in real browser"),
+    rate_limit: float = typer.Option(0.0, "--rate-limit", help="Seconds between requests (0 = fast)"),
+    timeout: float = typer.Option(10.0, "--timeout", help="HTTP request timeout"),
+    proxy: str = typer.Option("", "--proxy", help="Proxy URL (e.g. http://127.0.0.1:8080 for Burp)"),
+    cookie: str = typer.Option("", "--cookie", "-c", help="Session cookies ('key=val; key2=val2')"),
+    extra_cookies: str = typer.Option("", "--extra-cookies", help="Additional cookies ('key=val; key2=val2')"),
+    login_url: str = typer.Option("", help="Login page URL for auto-auth"),
+    username: str = typer.Option("", "-u", help="Username for auto-auth"),
+    password: str = typer.Option("", "-p", help="Password for auto-auth"),
+    provider: str = typer.Option("", help="LLM provider (deepseek|openai|groq|ollama)"),
+    model: str = typer.Option("", help="Specific LLM model name"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """
+    Run exploit scan against discovered attack surface.
+
+    Supports two modes:
+      1. Full pipeline: senshi scan http://target.com (runs recon then exploit)
+      2. From recon:    senshi scan --from-recon attack_surface.json
+
+    8 exploit agents: SQLi, XSS, CMDi, PathTraversal, SSRF, SSTI, IDOR, OpenRedirect.
+    Layered payload architecture: seed payloads + LLM-adaptive generation.
+    NO EXPLOIT = NO REPORT.
+
+    Examples:
+        senshi scan http://dvwa.local --login-url http://dvwa.local/login.php -u admin -p password --extra-cookies "security=low"
+        senshi scan --from-recon attack_surface.json --cookie "PHPSESSID=abc; security=low"
+        senshi scan http://target.com --agents sqli,xss,cmdi --no-ai
+        senshi scan http://target.com --proxy http://127.0.0.1:8080
+    """
+    from senshi.utils.logger import setup_global_logging
+
+    print_banner()
+    setup_global_logging(verbose)
+
+    if not target and not from_recon:
+        print_error("Provide a target URL or --from-recon path")
+        raise typer.Exit(1)
+
+    # -- Load or build attack surface --
+    if from_recon:
+        console.print(f"\n  Loading attack surface from: [cyan]{from_recon}[/cyan]")
+        from senshi.models.attack_surface import AttackSurface
+        try:
+            surface = AttackSurface.load(from_recon)
+        except Exception as exc:
+            print_error(f"Failed to load attack surface: {exc}")
+            raise typer.Exit(1)
+        console.print(f"  [green][OK][/green] {surface.summary()}")
+        console.print()
+    else:
+        # Run recon first, then exploit
+        import asyncio
+        console.print("\n  [bold cyan]Phase 1: Reconnaissance[/bold cyan]\n")
+
+        # Write recon to a temp file
+        recon_output = "attack_surface.json"
+        asyncio.run(_recon_async(
+            target=target,
+            output=recon_output,
+            headless=True,
+            max_pages=50,
+            timeout=60,
+            export_har=False,
+            proxy=proxy,
+            cookie=cookie,
+            extra_cookies=extra_cookies,
+            login_url=login_url,
+            username=username,
+            password=password,
+            verbose=verbose,
+        ))
+
+        from senshi.models.attack_surface import AttackSurface
+        try:
+            surface = AttackSurface.load(recon_output)
+        except Exception as exc:
+            print_error(f"Recon failed: {exc}")
+            raise typer.Exit(1)
+
+    # -- Build session --
+    from senshi.core.session import Session
+    from senshi.utils.http import parse_cookies
+
+    base_url = surface.target_url or target or ""
+    session_cookies: dict[str, str] = {}
+
+    # Auth
+    if login_url and username and password:
+        console.print("  Authenticating...")
+        try:
+            import httpx
+            from senshi.auth.manager import AuthManager
+            auth_mgr = AuthManager(login_url, username, password)
+            with httpx.Client(follow_redirects=True, timeout=30) as client:
+                session_cookie_str = auth_mgr.login_sync(client)
+            if session_cookie_str:
+                session_cookies.update(parse_cookies(session_cookie_str))
+                console.print("  [green][OK][/green] Authenticated")
+            else:
+                console.print("  [yellow]! Auth failed -- continuing unauthenticated[/yellow]")
+        except Exception as exc:
+            console.print(f"  [yellow]! Auth error: {exc}[/yellow]")
+
+    if cookie:
+        session_cookies.update(parse_cookies(cookie))
+    if extra_cookies:
+        session_cookies.update(parse_cookies(extra_cookies))
+
+    session = Session(
+        base_url=base_url,
+        proxy=proxy,
+        rate_limit=rate_limit,
+        cookies=session_cookies if session_cookies else None,
+        timeout=timeout,
+    )
+
+    # -- Brain (LLM) --
+    brain = None
+    if not no_ai:
+        try:
+            from senshi.ai.brain import Brain
+            from senshi.core.config import SenshiConfig
+            config = SenshiConfig.load()
+            if provider:
+                config.provider = provider
+            if model:
+                config.model = model
+            brain = Brain(config=config)
+            console.print(f"  [dim]AI: {brain.provider}/{brain.model}[/dim]")
+        except Exception:
+            console.print("  [yellow]! No AI provider configured. Using seed payloads only.[/yellow]")
+            console.print("  [dim]Run 'senshi setup' to configure an LLM for adaptive payload generation.[/dim]")
+
+    # -- Config --
+    from senshi.exploit.config import ExploitConfig
+    exploit_config = ExploitConfig(
+        output_path=output,
+        rate_limit=rate_limit,
+        timeout=timeout,
+        aggressive=aggressive,
+        browser_verify=browser_verify,
+        use_ai=not no_ai,
+        proxy=proxy,
+        skip_agents=[a.strip() for a in skip_agents.split(",") if a.strip()],
+        only_agents=[a.strip() for a in agents.split(",") if a.strip()],
+    )
+
+    # -- Run exploit engine --
+    from senshi.exploit.engine import ExploitEngine
+    from rich.table import Table as RichTable
+
+    engine = ExploitEngine(session=session, config=exploit_config, brain=brain)
+
+    console.print(f"\n  [bold cyan]Phase 2: Exploitation[/bold cyan]")
+    console.print(f"  Agents: {', '.join(a.name for a in engine.agents)}")
+    console.print(f"  Endpoints: {surface.total_endpoints} ({surface.injectable_params} injectable params)")
+    console.print()
+
+    def _print_event(event: str, **kwargs):
+        """Real-time output callback."""
+        if event == "agent_start":
+            agent = kwargs.get("agent", "")
+            ep = kwargs.get("endpoint")
+            params = kwargs.get("params", "")
+            if ep:
+                console.print(f"  [dim]{agent}[/dim] -> {ep.method} {ep.path} [dim](param: {params})[/dim]")
+        elif event == "finding":
+            f = kwargs.get("finding")
+            if f:
+                sev_color = {
+                    "critical": "red bold",
+                    "high": "red",
+                    "medium": "yellow",
+                    "low": "blue",
+                    "info": "dim",
+                }.get(f.severity.value, "white")
+                confirmed = " [green][CONFIRMED][/green]" if f.confirmed else ""
+                console.print(f"\n  [{sev_color}][{f.severity.value.upper()}][/{sev_color}] {f.title}{confirmed}")
+                console.print(f"    Endpoint: {f.endpoint}")
+                console.print(f"    Payload:  {f.payload[:80]}")
+                console.print(f"    Evidence: {f.evidence[:100]}")
+                if f.poc_curl:
+                    console.print(f"    PoC:      {f.poc_curl[:120]}")
+                console.print()
+
+    try:
+        findings = engine.run(surface, print_fn=_print_event)
+    except KeyboardInterrupt:
+        engine.state.interrupt()
+        console.print("\n  [yellow]Scan interrupted -- partial results saved[/yellow]")
+        findings = engine.state.findings
+    finally:
+        session.close()
+
+    # -- Summary --
+    summary = engine.get_summary(findings)
+    console.print(f"\n  [bold cyan]Scan Complete[/bold cyan]")
+
+    stats_table = RichTable(title="Scan Results", show_header=True)
+    stats_table.add_column("Metric", style="cyan", min_width=20)
+    stats_table.add_column("Value", style="green bold")
+
+    stats_table.add_row("Total Findings", str(summary["total_findings"]))
+    stats_table.add_row("Confirmed", str(summary["confirmed"]))
+
+    sev = summary["severity"]
+    sev_str = f"{sev['critical']} CRITICAL, {sev['high']} HIGH, {sev['medium']} MEDIUM, {sev['low']} LOW"
+    stats_table.add_row("By Severity", sev_str)
+    stats_table.add_row("Endpoints Tested", str(summary["endpoints_tested"]))
+    stats_table.add_row("Requests Sent", str(summary["requests_sent"]))
+    stats_table.add_row("LLM Calls", str(summary.get("llm_calls", 0)))
+
+    mins = int(summary["duration_seconds"]) // 60
+    secs = int(summary["duration_seconds"]) % 60
+    stats_table.add_row("Duration", f"{mins}m {secs}s")
+    stats_table.add_row("Report", output)
+
+    console.print(stats_table)
+
+    if findings:
+        console.print()
+        findings_table = RichTable(title="Findings", show_header=True)
+        findings_table.add_column("Sev", width=10)
+        findings_table.add_column("Title", min_width=30)
+        findings_table.add_column("Endpoint", min_width=25)
+        findings_table.add_column("Confirmed", width=10)
+
+        for f in sorted(findings, key=lambda x: x.severity.rank if hasattr(x.severity, 'rank') else 0, reverse=True):
+            sev_color = {
+                "critical": "red bold",
+                "high": "red",
+                "medium": "yellow",
+                "low": "blue",
+            }.get(f.severity.value, "white")
+            findings_table.add_row(
+                f"[{sev_color}]{f.severity.value.upper()}[/{sev_color}]",
+                f.title,
+                f"{f.method} {f.endpoint.split('/')[-1] if f.endpoint else ''}",
+                "[green]YES[/green]" if f.confirmed else "[dim]no[/dim]",
+            )
+        console.print(findings_table)
+
+    console.print(f"\n  [green]Results saved to: {output}[/green]\n")
+
+
+def _print_recon_summary(surface: "AttackSurface") -> None:
+    """Rich table summarizing the discovered attack surface."""
+    from rich.table import Table as RichTable
+
+    # Stats table
+    stats_table = RichTable(title="Recon Summary", show_header=True)
+    stats_table.add_column("Metric", style="cyan", min_width=25)
+    stats_table.add_column("Value", style="green bold")
+
+    stats_table.add_row("Total Endpoints", str(surface.total_endpoints))
+    stats_table.add_row("Total Parameters", str(surface.total_params))
+    stats_table.add_row("Injectable Parameters", str(surface.injectable_params))
+    stats_table.add_row("Auth Scheme", surface.auth_scheme.get("type", "none"))
+    if surface.technologies:
+        stats_table.add_row("Technologies", ", ".join(surface.technologies[:5]))
+
+    console.print(stats_table)
+
+    # Top endpoints by risk
+    top = surface.get_endpoints_by_risk()[:15]
+    if top:
+        ep_table = RichTable(title="Top Endpoints (by risk)", show_header=True)
+        ep_table.add_column("Method", style="magenta", width=8)
+        ep_table.add_column("Path", style="blue")
+        ep_table.add_column("Params", style="white")
+        ep_table.add_column("Type", style="dim", width=6)
+
+        for ep in top:
+            param_names = [p.name for p in ep.get_injectable_params()[:4]]
+            more = len(ep.get_injectable_params()) - 4
+            params_str = ", ".join(param_names)
+            if more > 0:
+                params_str += f" (+{more})"
+            ep_table.add_row(
+                ep.method,
+                ep.path,
+                params_str or "-",
+                ep.content_type.value,
+            )
+
+        console.print(ep_table)
 
 
 def _write_output(result: "ScanResult", output: str) -> None:
