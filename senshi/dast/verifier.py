@@ -54,9 +54,15 @@ class ResponseVerifier:
         r"quoted string not properly terminated",
         r"ora-\d{4,5}",
         r"pg::syntaxerror",
-        r"sqlite3::exception",
+        r"sqlite3?::(?:sql)?exception",
         r"syntax error at or near",
         r"supplied argument is not a valid mysql",
+        # SQLite (Node.js / Python)
+        r"SQLITE_ERROR",
+        r"SqliteError",
+        r"SequelizeDatabaseError",
+        r"near\s+[\"'].*[\"']\s*:\s*syntax error",
+        r"unrecognized token",
     ]
 
     SQLI_STRONG_DATA = [
@@ -216,34 +222,77 @@ class ResponseVerifier:
         )
 
     def verify_ssrf(self, response_body: str, payload: str, **kwargs) -> VerificationResult:
-        """Verify SSRF by checking for internal service response artifacts."""
+        """Verify SSRF by checking for internal service response artifacts.
+
+        CRITICAL: Exclude matches that are just payload reflection.
+        The payload URL may be echoed in error pages (e.g., Express error titles),
+        sometimes with slight mangling (http:// -> http:/).  Any SSRF keyword
+        that also appears inside the payload itself is NOT evidence of server fetch.
+        """
+        body_lower = response_body.lower()
+        payload_lower = payload.lower()
+
+        # Check if the payload itself (or a significant portion) is reflected
+        payload_reflected = payload_lower in body_lower
+
+        # Also detect partial reflection: key domain/path parts of the payload
+        # appear in the body (e.g., "metadata.google.internal" from the URL)
+        payload_parts_reflected = False
+        # Extract distinctive parts from the payload (hostname, path segments)
+        for part in payload_lower.replace("://", " ").replace("/", " ").split():
+            if len(part) > 6 and part in body_lower:
+                payload_parts_reflected = True
+                break
+
         for pattern in self.SSRF_STRONG:
             match = re.search(pattern, response_body, re.IGNORECASE)
             if match:
+                matched_text = match.group(0)
+
+                # KEY CHECK: If the matched keyword is a substring of our payload,
+                # it's almost certainly just our payload echoed back — NOT a real
+                # server-side fetch. This catches both exact and partial reflection.
+                if matched_text.lower() in payload_lower:
+                    continue  # This keyword came from our own payload
+
+                # If payload parts are reflected and the match is near them, skip
+                if payload_reflected or payload_parts_reflected:
+                    # Check if the match position overlaps with payload text
+                    payload_pos = body_lower.find(payload_lower) if payload_reflected else -1
+                    if payload_pos != -1:
+                        match_start = match.start()
+                        match_end = match.end()
+                        payload_end = payload_pos + len(payload_lower)
+                        if payload_pos <= match_start and match_end <= payload_end + 50:
+                            continue  # Match is within or near the reflected payload
+
+                # Match found OUTSIDE payload reflection — likely real SSRF
                 return VerificationResult(
                     verified=True,
                     confidence=0.90,
                     evidence_type="response_pattern",
-                    evidence_detail=f"Internal service response: {match.group(0)[:60]}",
+                    evidence_detail=f"Internal service response: {matched_text[:60]}",
                 )
 
-        # Connection error artifacts (server tried to connect)
-        connection_errors = ["urlopen error", "connection refused", "econnrefused", "timed out", "dns"]
-        body_lower = response_body.lower()
-        for err in connection_errors:
-            if err in body_lower:
-                return VerificationResult(
-                    verified=True,
-                    confidence=0.70,
-                    evidence_type="error",
-                    evidence_detail=f"Server attempted connection (error: {err})",
-                )
+        # Connection error artifacts — only suppress if the EXACT full payload URL
+        # is reflected (e.g., in an Express error title). Partial reflection (IP/host
+        # appearing in the error message) is expected for real connection errors.
+        if not payload_reflected:
+            connection_errors = ["urlopen error", "connection refused", "econnrefused", "timed out"]
+            for err in connection_errors:
+                if err in body_lower:
+                    return VerificationResult(
+                        verified=True,
+                        confidence=0.70,
+                        evidence_type="error",
+                        evidence_detail=f"Server attempted connection (error: {err})",
+                    )
 
         return VerificationResult(
             verified=False,
             confidence=0.0,
             evidence_type="none",
-            evidence_detail="No SSRF evidence — URL may have just been echoed, not fetched",
+            evidence_detail="No SSRF evidence — URL was reflected/echoed, not fetched by server",
         )
 
     def verify(self, vuln_type: str, response_body: str, payload: str, **kwargs) -> VerificationResult:
