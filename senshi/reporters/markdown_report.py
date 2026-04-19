@@ -88,6 +88,17 @@ def generate_markdown_report(
                 lines.append(f"\n**Evidence:**\n```\n{finding.evidence}\n```")
             if finding.code_snippet:
                 lines.append(f"\n**Code:**\n```\n{finding.code_snippet}\n```")
+                
+            if finding.poc_curl:
+                lines.append(f"\n**PoC (curl):**\n```bash\n{finding.poc_curl}\n```")
+
+            if finding.poc_python:
+                lines.append(f"\n**PoC (Python):**\n```python\n{finding.poc_python}\n```")
+
+            if getattr(finding, "poc_steps", None):
+                lines.append("\n**Steps to Reproduce:**")
+                for step_num, step in enumerate(finding.poc_steps, 1):
+                    lines.append(f"{step_num}. {step}")
             if finding.remediation:
                 lines.append(f"\n**Remediation:** {finding.remediation}")
 

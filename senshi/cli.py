@@ -1111,6 +1111,16 @@ def scan(
         findings_table.add_column("Endpoint", min_width=25)
         findings_table.add_column("Confirmed", width=10)
 
+        def _format_endpoint(f):
+            if not f.endpoint: return ""
+            from urllib.parse import urlparse
+            parsed = urlparse(f.endpoint)
+            segments = [s for s in parsed.path.split("/") if s]
+            short_path = "/".join(segments[-2:]) if len(segments) > 2 else "/".join(segments)
+            display = f"{f.method} /{short_path}"
+            if parsed.query: display += f"?{parsed.query[:30]}"
+            return display[:50]
+
         for f in sorted(findings, key=lambda x: x.severity.rank if hasattr(x.severity, 'rank') else 0, reverse=True):
             sev_color = {
                 "critical": "red bold",
@@ -1121,12 +1131,47 @@ def scan(
             findings_table.add_row(
                 f"[{sev_color}]{f.severity.value.upper()}[/{sev_color}]",
                 f.title,
-                f"{f.method} {f.endpoint.split('/')[-1] if f.endpoint else ''}",
+                _format_endpoint(f),
                 "[green]YES[/green]" if f.confirmed else "[dim]no[/dim]",
             )
         console.print(findings_table)
 
     console.print(f"\n  [green]Results saved to: {output}[/green]\n")
+
+    if findings:
+        from senshi.reporters.poc_report import generate_poc_script
+        
+        poc_findings = [f for f in findings if f.poc_curl or f.poc_python]
+        if poc_findings:
+            bash_path, python_path = generate_poc_script(
+                poc_findings,
+                target=from_recon or target,
+                cookie=cookie,
+                output_dir=".",
+            )
+            if bash_path:
+                console.print(f"  [cyan]PoC Scripts Generated:[/cyan]")
+                console.print(f"    Bash:   [green]{bash_path}[/green]  (run: bash {bash_path})")
+                console.print(f"    Python: [green]{python_path}[/green]  (run: python {python_path})")
+                console.print()
+
+    md_output = output.replace(".json", "_report.md") if output.endswith(".json") else "scan_report.md"
+
+    from senshi.reporters.markdown_report import generate_markdown_report
+    from senshi.reporters.models import ScanResult, ScanMode
+    from datetime import datetime
+
+    scan_result = ScanResult(
+        target=from_recon or target,
+        mode=ScanMode.DAST,
+        started_at=engine.state.start_time,
+        completed_at=datetime.now().isoformat(),
+        findings=findings,
+        endpoints_discovered=len(engine.state.scanned_endpoints),
+        provider=provider or "default",
+    )
+    generate_markdown_report(scan_result, md_output)
+    console.print(f"  [cyan]Report:[/cyan] [green]{md_output}[/green]\n")
 
 
 def _print_recon_summary(surface: "AttackSurface") -> None:
