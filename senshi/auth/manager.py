@@ -88,10 +88,6 @@ class AuthManager:
             # Step 6: Extract all cookies from the client's cookie jar
             cookies = dict(client.cookies)
             if cookies:
-                # Add security=low for DVWA if not present
-                if "security" not in cookies:
-                    cookies["security"] = "low"
-                
                 self.session_cookie = "; ".join(f"{k}={v}" for k, v in cookies.items())
                 logger.info(f"Login successful! Final cookies: {list(cookies.keys())}")
                 return self.session_cookie
@@ -138,8 +134,6 @@ class AuthManager:
             # Step 5: Extract cookies
             cookies = dict(client.cookies)
             if cookies:
-                if "security" not in cookies:
-                    cookies["security"] = "low"
                 self.session_cookie = "; ".join(f"{k}={v}" for k, v in cookies.items())
                 return self.session_cookie
             

@@ -183,10 +183,13 @@ Before analyzing payloads, infer what this endpoint does:
 - The error should be CAUSED by the payload (compare to baseline)
 - Stack traces mentioning database code are strong evidence
 
-**5. CMDi ANALYSIS**
-- Look for command output: uid=, gid=, groups= (from id command), directory listings, file contents
-- Look for shell errors: command not found, permission denied
-- Endpoints with params like "host", "cmd", "exec" are likely command injection targets
+**5. CMDi ANALYSIS — STRICT VERIFICATION**
+- ONLY report CMDi as "confirmed" if you see ACTUAL command output in the response body:
+  - Linux: `uid=`, `gid=`, `groups=`, directory listings with permissions (drwx), file contents
+  - Windows: `Directory of`, `Volume Serial Number`, usernames from `whoami`
+- If the response is identical to baseline (same HTML, no command output), it is NOT vulnerable
+- "No error" does NOT mean "command executed" — commands MUST produce visible output
+- Endpoint name (/exec/, /ping/) is a HINT, not proof — require response evidence
 
 **6. FALSE POSITIVE PREVENTION**
 For each potential finding, ask:

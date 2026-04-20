@@ -112,12 +112,12 @@ def print_finding(severity: str, title: str, location: str) -> None:
 
 
 def print_success(message: str) -> None:
-    console.print(f"  [success]✓[/success] {message}")
+    console.print(f"  [success][OK][/success] {message}")
 
 
 def print_error(message: str) -> None:
-    console.print(f"  [error]✗[/error] {message}")
+    console.print(f"  [error][FAIL][/error] {message}")
 
 
 def print_status(message: str) -> None:
-    console.print(f"  [info]⠋[/info] {message}")
+    console.print(f"  [info]*[/info] {message}")
